@@ -37,6 +37,7 @@
     accentColor: '#e85d04',
     fontFamily: 'Inter',
     bannerUrl: '',
+    logoUrl: '',
     menuLayout: 'grid',
     showCalories: true,
     showAllergens: true,
@@ -48,6 +49,7 @@
     serviceChargeRate: '0',
     welcomeMessage: '',
     footerText: '',
+    orderEditWindowMinutes: '5',
     instagramUrl: '',
     facebookUrl: '',
     twitterUrl: '',
@@ -79,6 +81,7 @@
           accentColor: p.accentColor,
           fontFamily: p.fontFamily,
           bannerUrl: p.bannerUrl ?? '',
+          logoUrl: (p as any).logoUrl ?? '',
           menuLayout: p.menuLayout,
           showCalories: p.showCalories,
           showAllergens: p.showAllergens,
@@ -90,7 +93,8 @@
           serviceChargeRate: p.serviceChargeRate,
           welcomeMessage: p.welcomeMessage ?? '',
           footerText: p.footerText ?? '',
-          instagramUrl: (p.socialLinks as any)?.instagram ?? '',
+          orderEditWindowMinutes: String((p as any).orderEditWindowMinutes ?? 5),
+          instagramUrl: (p.socialLinks as any)?.instagram ?? '',,
           facebookUrl: (p.socialLinks as any)?.facebook ?? '',
           twitterUrl: (p.socialLinks as any)?.twitter ?? '',
         }
@@ -114,6 +118,7 @@
       accentColor: form.accentColor,
       fontFamily: form.fontFamily,
       bannerUrl: form.bannerUrl || undefined,
+      logoUrl: form.logoUrl || undefined,
       menuLayout: form.menuLayout,
       showCalories: form.showCalories,
       showAllergens: form.showAllergens,
@@ -125,6 +130,7 @@
       serviceChargeRate: parseFloat(form.serviceChargeRate),
       welcomeMessage: form.welcomeMessage || undefined,
       footerText: form.footerText || undefined,
+      orderEditWindowMinutes: parseInt(form.orderEditWindowMinutes) || 5,
       socialLinks: {
         instagram: form.instagramUrl || undefined,
         facebook: form.facebookUrl || undefined,
@@ -160,23 +166,48 @@
     <form onsubmit={handleSave} class="space-y-6">
       <!-- Subscription -->
       {#if profile}
+        {@const plan = profile.subscriptionPlan}
+        {@const isPaid = plan === 'basic' || plan === 'premium'}
+        {@const isPremium = plan === 'premium'}
         <Card>
-          <div class="flex items-center justify-between">
+          <div class="flex items-center justify-between flex-wrap gap-3">
             <div>
               <h2 class="font-semibold text-neutral-900 dark:text-neutral-100">Subscription</h2>
               <p class="text-sm text-neutral-500 dark:text-neutral-400 mt-0.5">Your current plan and limits.</p>
             </div>
             <div class="flex items-center gap-2">
-              <Badge variant={profile.subscriptionPlan === 'premium' ? 'brand' : profile.subscriptionPlan === 'basic' ? 'info' : 'neutral'}>
-                {profile.subscriptionPlan}
+              <Badge variant={plan === 'premium' ? 'brand' : plan === 'basic' ? 'info' : 'neutral'}>
+                {plan.charAt(0).toUpperCase() + plan.slice(1)}
               </Badge>
               <Badge variant={profile.status === 'active' ? 'success' : profile.status === 'trial' ? 'warning' : 'danger'}>
                 {profile.status}
               </Badge>
             </div>
           </div>
+          <div class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+            {#each [
+              { label: 'Tables', free: '1', basic: '10', premium: 'Unlimited' },
+              { label: 'Menu Items', free: '20', basic: '100', premium: 'Unlimited' },
+              { label: 'Branding', free: 'No', basic: 'Yes', premium: 'Yes' },
+              { label: 'Order Editing', free: 'No', basic: 'Yes', premium: 'Yes' },
+              { label: 'Analytics', free: 'Basic', basic: '30 days', premium: '90 days' },
+              { label: 'Social Links', free: 'No', basic: 'No', premium: 'Yes' },
+            ] as feat}
+              <div class="p-3 rounded-lg bg-neutral-50 dark:bg-neutral-800">
+                <p class="text-xs text-neutral-400 mb-1">{feat.label}</p>
+                <p class="font-semibold text-neutral-900 dark:text-neutral-100">
+                  {plan === 'premium' ? feat.premium : plan === 'basic' ? feat.basic : feat.free}
+                </p>
+              </div>
+            {/each}
+          </div>
           {#if profile.subscriptionExpiry}
             <p class="text-xs text-neutral-500 mt-3">Expires: {new Date(profile.subscriptionExpiry).toLocaleDateString()}</p>
+          {/if}
+          {#if !isPaid}
+            <div class="mt-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-sm text-amber-700 dark:text-amber-400">
+              You are on the Free plan. Upgrade to Basic or Premium to unlock branding, order editing, and more.
+            </div>
           {/if}
         </Card>
       {/if}
@@ -196,19 +227,24 @@
 
       <!-- Branding -->
       <Card>
-        <h2 class="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">Branding</h2>
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-semibold text-neutral-900 dark:text-neutral-100">Branding</h2>
+          {#if profile && profile.subscriptionPlan === 'free'}
+            <Badge variant="warning">Basic+ only</Badge>
+          {/if}
+        </div>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div class="flex flex-col gap-1">
-            <label class="text-sm font-medium text-neutral-700 dark:text-neutral-300">Primary Color</label>
+            <label for="primary-color" class="text-sm font-medium text-neutral-700 dark:text-neutral-300">Primary Color</label>
             <div class="flex gap-2">
-              <input type="color" bind:value={form.primaryColor} class="h-10 w-14 rounded-lg border border-neutral-300 dark:border-neutral-600 cursor-pointer" />
+              <input id="primary-color" type="color" bind:value={form.primaryColor} class="h-10 w-14 rounded-lg border border-neutral-300 dark:border-neutral-600 cursor-pointer" />
               <Input bind:value={form.primaryColor} class="flex-1" />
             </div>
           </div>
           <div class="flex flex-col gap-1">
-            <label class="text-sm font-medium text-neutral-700 dark:text-neutral-300">Accent Color</label>
+            <label for="accent-color" class="text-sm font-medium text-neutral-700 dark:text-neutral-300">Accent Color</label>
             <div class="flex gap-2">
-              <input type="color" bind:value={form.accentColor} class="h-10 w-14 rounded-lg border border-neutral-300 dark:border-neutral-600 cursor-pointer" />
+              <input id="accent-color" type="color" bind:value={form.accentColor} class="h-10 w-14 rounded-lg border border-neutral-300 dark:border-neutral-600 cursor-pointer" />
               <Input bind:value={form.accentColor} class="flex-1" />
             </div>
           </div>
@@ -219,6 +255,7 @@
             options={[{ value: 'grid', label: 'Grid' }, { value: 'list', label: 'List' }]}
           />
           <Input label="Banner Image URL" bind:value={form.bannerUrl} placeholder="https://..." class="sm:col-span-2" />
+          <Input label="Logo URL" bind:value={form.logoUrl} placeholder="https://..." class="sm:col-span-2" />
         </div>
       </Card>
 
@@ -239,6 +276,21 @@
           <Input label="Currency Code" bind:value={form.currencyCode} placeholder="USD" />
           <Input label="Tax Rate (%)" type="number" bind:value={form.taxRate} min="0" max="100" step="0.01" />
           <Input label="Service Charge (%)" type="number" bind:value={form.serviceChargeRate} min="0" max="100" step="0.01" />
+        </div>
+        <div class="mt-4 border-t border-neutral-100 dark:border-neutral-800 pt-4">
+          <div class="flex items-center justify-between mb-2">
+            <div>
+              <p class="text-sm font-medium text-neutral-700 dark:text-neutral-300">Order Edit Window</p>
+              <p class="text-xs text-neutral-400">How many minutes customers can edit their order after placing it. Set to 0 to disable.</p>
+            </div>
+            {#if profile && profile.subscriptionPlan === 'free'}
+              <Badge variant="warning">Basic+ only</Badge>
+            {/if}
+          </div>
+          <div class="flex items-center gap-3">
+            <Input type="number" bind:value={form.orderEditWindowMinutes} min="0" max="60" step="1" class="w-28" />
+            <span class="text-sm text-neutral-500">minutes (default: 5)</span>
+          </div>
         </div>
       </Card>
 
@@ -262,7 +314,12 @@
 
       <!-- Social Links -->
       <Card>
-        <h2 class="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">Social Links</h2>
+        <div class="flex items-center justify-between mb-4">
+          <h2 class="font-semibold text-neutral-900 dark:text-neutral-100">Social Links</h2>
+          {#if profile && profile.subscriptionPlan !== 'premium'}
+            <Badge variant="brand">Premium only</Badge>
+          {/if}
+        </div>
         <div class="space-y-3">
           <Input label="Instagram" bind:value={form.instagramUrl} placeholder="https://instagram.com/..." />
           <Input label="Facebook" bind:value={form.facebookUrl} placeholder="https://facebook.com/..." />

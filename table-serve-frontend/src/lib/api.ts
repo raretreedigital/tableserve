@@ -249,4 +249,11 @@ export const customerApi = {
 
   getOrderStatus: (id: string) =>
     request(`/customer/orders/${id}`),
+
+  editOrder: (id: string, data: object) =>
+    request(`/customer/orders/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+      headers: tableSessionHeader(),
+    }),
 }

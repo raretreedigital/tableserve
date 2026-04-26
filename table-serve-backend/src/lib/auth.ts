@@ -1,9 +1,20 @@
 import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
-import { admin, organization } from 'better-auth/plugins'
+import { admin, organization, createAccessControl } from 'better-auth/plugins'
 import { db } from '../db'
 import * as schema from '../db/schema'
 import { env } from './env'
+
+// Define the access control statements shared between roles
+const ac = createAccessControl({
+  user: ['create', 'list', 'set-role', 'ban', 'impersonate', 'delete', 'set-password', 'get', 'update'],
+  session: ['list', 'revoke', 'delete'],
+})
+
+const superadminRole = ac.newRole({
+  user: ['create', 'list', 'set-role', 'ban', 'impersonate', 'delete', 'set-password', 'get', 'update'],
+  session: ['list', 'revoke', 'delete'],
+})
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
@@ -27,8 +38,11 @@ export const auth = betterAuth({
   },
   plugins: [
     admin({
-      adminRoles: ['superadmin'],
       defaultRole: 'user',
+      adminRoles: ['superadmin'],
+      roles: {
+        superadmin: superadminRole,
+      },
     }),
     organization({
       allowUserToCreateOrganization: false,

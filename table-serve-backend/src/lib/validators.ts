@@ -62,6 +62,8 @@ export const updateOrganizationProfileSchema = z.object({
   serviceChargeRate: z.number().min(0).max(100).optional(),
   welcomeMessage: z.string().max(500).optional(),
   footerText: z.string().max(300).optional(),
+  logoUrl: z.string().url().optional().or(z.literal('')),
+  orderEditWindowMinutes: z.number().int().min(0).max(60).optional(),
   socialLinks: z
     .object({
       instagram: z.string().optional(),
@@ -153,6 +155,20 @@ export const updateOrderStatusSchema = z.object({
   status: z.enum(['pending', 'confirmed', 'preparing', 'ready', 'served', 'cancelled']),
 })
 
+export const editOrderSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        menuItemId: z.string().min(1),
+        quantity: z.number().int().min(1).max(99),
+        notes: z.string().max(200).optional(),
+      })
+    )
+    .min(1)
+    .max(50),
+  notes: z.string().max(500).optional(),
+})
+
 // ─── Analytics query ─────────────────────────
 
 export const analyticsQuerySchema = z.object({
@@ -160,4 +176,22 @@ export const analyticsQuerySchema = z.object({
   to: z.string().datetime().optional(),
   period: z.enum(['today', 'week', 'month', 'quarter', 'year', 'custom']).optional(),
   organizationId: z.string().optional(),
+})
+
+// ─── Waiter management ───────────────────────
+
+export const createWaiterSchema = z.object({
+  name: z.string().min(2).max(100),
+  email: z.string().email(),
+  tableIds: z.array(z.string()).default([]),
+})
+
+export const updateWaiterSchema = z.object({
+  name: z.string().min(2).max(100).optional(),
+  tableIds: z.array(z.string()).optional(),
+  isActive: z.boolean().optional(),
+})
+
+export const updateWaiterDutyStatusSchema = z.object({
+  dutyStatus: z.enum(['on_duty', 'on_leave', 'off_shift']),
 })

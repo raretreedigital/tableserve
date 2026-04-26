@@ -12,7 +12,7 @@ import {
   order,
   orderItem,
 } from '../db/schema'
-import { createOrderSchema } from '../lib/validators'
+import { createOrderSchema, editOrderSchema } from '../lib/validators'
 import { env } from '../lib/env'
 
 const customerRouter = new Hono()
@@ -356,6 +356,11 @@ customerRouter.post('/orders', zValidator('json', createOrderSchema), async (c) 
 
   const orderId = crypto.randomUUID()
 
+  const editWindowMinutes = profile[0].orderEditWindowMinutes ?? 5
+  const editableUntil = editWindowMinutes > 0
+    ? new Date(Date.now() + editWindowMinutes * 60_000)
+    : null
+
   await db.insert(order).values({
     id: orderId,
     organizationId: orgId,
@@ -369,6 +374,7 @@ customerRouter.post('/orders', zValidator('json', createOrderSchema), async (c) 
     serviceCharge: serviceCharge.toFixed(2),
     totalAmount: totalAmount.toFixed(2),
     notes: notes ?? null,
+    editableUntil,
   })
 
   await db.insert(orderItem).values(
@@ -387,6 +393,8 @@ customerRouter.post('/orders', zValidator('json', createOrderSchema), async (c) 
       message: 'Order placed successfully.',
       orderId,
       totalAmount: totalAmount.toFixed(2),
+      editableUntil: editableUntil?.toISOString() ?? null,
+      editWindowMinutes,
     },
     201
   )
@@ -408,6 +416,99 @@ customerRouter.get('/orders/:id', async (c) => {
   const items = await db.select().from(orderItem).where(eq(orderItem.orderId, id))
 
   return c.json({ order: orders[0], items })
+})
+
+// ─── Edit order (within edit window) ────────
+
+customerRouter.patch('/orders/:id', zValidator('json', editOrderSchema), async (c) => {
+  const { id } = c.req.param()
+  const { items, notes } = c.req.valid('json')
+
+  // Table session required
+  const rawSession = c.req.header('x-table-session')
+  if (!rawSession) return c.json({ error: 'No table session.' }, 401)
+  const session = await verifyTableSession(rawSession)
+  if (!session) return c.json({ error: 'Table session expired. Please scan the table tag again.' }, 401)
+
+  const existing = await db.select().from(order).where(eq(order.id, id)).limit(1)
+  if (!existing.length) return c.json({ error: 'Order not found.' }, 404)
+
+  const o = existing[0]
+
+  // Session must belong to same org
+  if (o.organizationId !== session.orgId) {
+    return c.json({ error: 'Session does not match this order.' }, 403)
+  }
+
+  // Only pending orders can be edited
+  if (o.status !== 'pending') {
+    return c.json({ error: 'This order can no longer be edited. It is already being processed.' }, 409)
+  }
+
+  // Check edit window
+  if (!o.editableUntil || new Date() > new Date(o.editableUntil)) {
+    return c.json({ error: 'The edit window for this order has closed.' }, 409)
+  }
+
+  // Validate and price new items
+  const profile = await db
+    .select({ taxRate: organizationProfile.taxRate, serviceChargeRate: organizationProfile.serviceChargeRate })
+    .from(organizationProfile)
+    .where(eq(organizationProfile.organizationId, o.organizationId))
+    .limit(1)
+
+  const menuItemsData = await db
+    .select()
+    .from(menuItem)
+    .where(and(eq(menuItem.organizationId, o.organizationId), eq(menuItem.isAvailable, true)))
+
+  const menuItemMap = new Map(menuItemsData.map((item) => [item.id, item]))
+
+  const newOrderItems: typeof orderItem.$inferInsert[] = []
+  let subtotal = 0
+
+  for (const reqItem of items) {
+    const menuItemData = menuItemMap.get(reqItem.menuItemId)
+    if (!menuItemData) {
+      return c.json({ error: `Menu item ${reqItem.menuItemId} not found or unavailable.` }, 400)
+    }
+    const unitPrice = parseFloat(String(menuItemData.price))
+    const totalPrice = unitPrice * reqItem.quantity
+    subtotal += totalPrice
+    newOrderItems.push({
+      id: crypto.randomUUID(),
+      orderId: id,
+      menuItemId: reqItem.menuItemId,
+      menuItemName: menuItemData.name,
+      quantity: reqItem.quantity,
+      unitPrice: unitPrice.toFixed(2),
+      totalPrice: totalPrice.toFixed(2),
+      notes: reqItem.notes ?? null,
+    })
+  }
+
+  const taxRate = parseFloat(String(profile[0]?.taxRate ?? '0')) / 100
+  const serviceRate = parseFloat(String(profile[0]?.serviceChargeRate ?? '0')) / 100
+  const taxAmount = subtotal * taxRate
+  const serviceCharge = subtotal * serviceRate
+  const totalAmount = subtotal + taxAmount + serviceCharge
+
+  // Replace order items atomically
+  await db.delete(orderItem).where(eq(orderItem.orderId, id))
+  await db.insert(orderItem).values(newOrderItems)
+  await db
+    .update(order)
+    .set({
+      subtotal: subtotal.toFixed(2),
+      taxAmount: taxAmount.toFixed(2),
+      serviceCharge: serviceCharge.toFixed(2),
+      totalAmount: totalAmount.toFixed(2),
+      notes: notes ?? o.notes,
+      updatedAt: new Date(),
+    })
+    .where(eq(order.id, id))
+
+  return c.json({ message: 'Order updated.', orderId: id, totalAmount: totalAmount.toFixed(2) })
 })
 
 export { customerRouter }

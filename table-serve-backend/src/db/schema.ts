@@ -142,6 +142,8 @@ export const organizationProfile = pgTable('organization_profile', {
   welcomeMessage: text('welcome_message'),
   footerText: text('footer_text'),
   socialLinks: jsonb('social_links'),
+  logoUrl: text('logo_url'),
+  orderEditWindowMinutes: integer('order_edit_window_minutes').notNull().default(5),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 })
@@ -222,6 +224,7 @@ export const order = pgTable('order', {
   serviceCharge: numeric('service_charge', { precision: 10, scale: 2 }).notNull().default('0'),
   totalAmount: numeric('total_amount', { precision: 10, scale: 2 }).notNull(),
   notes: text('notes'),
+  editableUntil: timestamp('editable_until'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 })
@@ -235,6 +238,21 @@ export const orderItem = pgTable('order_item', {
   unitPrice: numeric('unit_price', { precision: 10, scale: 2 }).notNull(),
   totalPrice: numeric('total_price', { precision: 10, scale: 2 }).notNull(),
   notes: text('notes'),
+})
+
+// ─────────────────────────────────────────────
+// Waiter Assignments
+// ─────────────────────────────────────────────
+
+export const waiterAssignment = pgTable('waiter_assignment', {
+  id: text('id').primaryKey().$defaultFn(() => crypto.randomUUID()),
+  organizationId: text('organization_id').notNull().references(() => organization.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => user.id, { onDelete: 'cascade' }),
+  tableIds: text('table_ids').notNull().default('[]'), // JSON array of restaurantTable IDs
+  isActive: boolean('is_active').notNull().default(true),
+  dutyStatus: text('duty_status').notNull().default('on_duty'), // on_duty | on_leave | off_shift
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
 })
 
 // ─────────────────────────────────────────────
@@ -269,4 +287,9 @@ export const orderRelations = relations(order, ({ one, many }) => ({
 export const orderItemRelations = relations(orderItem, ({ one }) => ({
   order: one(order, { fields: [orderItem.orderId], references: [order.id] }),
   menuItem: one(menuItem, { fields: [orderItem.menuItemId], references: [menuItem.id] }),
+}))
+
+export const waiterAssignmentRelations = relations(waiterAssignment, ({ one }) => ({
+  organization: one(organization, { fields: [waiterAssignment.organizationId], references: [organization.id] }),
+  user: one(user, { fields: [waiterAssignment.userId], references: [user.id] }),
 }))

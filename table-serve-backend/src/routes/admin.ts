@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { zValidator } from '@hono/zod-validator'
-import { eq, and, desc, asc, gte, lte, sql, sum, count, avg } from 'drizzle-orm'
+import { eq, and, desc, asc, gte, lte, sql, sum, count, avg, inArray } from 'drizzle-orm'
 import { db } from '../db'
 import {
   organization,
@@ -12,9 +12,11 @@ import {
   order,
   orderItem,
   user,
+  waiterAssignment,
 } from '../db/schema'
 import { requireOrgAdmin } from '../middleware/auth-middleware'
 import { auth } from '../lib/auth'
+import { log } from '../lib/logger'
 import {
   registerAdminSchema,
   updateOrganizationProfileSchema,
@@ -26,9 +28,11 @@ import {
   updateRestaurantTableSchema,
   updateOrderStatusSchema,
   analyticsQuerySchema,
+  createWaiterSchema,
+  updateWaiterSchema,
 } from '../lib/validators'
 
-const adminRouter = new Hono()
+const adminRouter = new Hono<{ Variables: { user: any } }>()
 
 // ─── Register admin + org ────────────────────
 
@@ -198,9 +202,44 @@ adminRouter.patch(
 
     const data = c.req.valid('json')
 
+    // ── Plan-based feature gating ──
+    // Fetch current plan before applying changes
+    const currentProfile = await db
+      .select({ subscriptionPlan: organizationProfile.subscriptionPlan })
+      .from(organizationProfile)
+      .where(eq(organizationProfile.organizationId, orgId))
+      .limit(1)
+
+    const plan = currentProfile[0]?.subscriptionPlan ?? 'free'
+    const isPaidPlan = plan === 'basic' || plan === 'premium'
+    const isPremium = plan === 'premium'
+
+    // Branding fields are Basic+ only
+    const brandingFields = ['primaryColor', 'secondaryColor', 'accentColor', 'fontFamily', 'bannerUrl', 'logoUrl', 'welcomeMessage', 'footerText']
+    for (const field of brandingFields) {
+      if ((data as any)[field] !== undefined && !isPaidPlan) {
+        return c.json({ error: `Branding customization requires the Basic plan or higher. You are on the ${plan} plan.` }, 403)
+      }
+    }
+
+    // orderEditWindowMinutes is Basic+ only
+    if (data.orderEditWindowMinutes !== undefined && !isPaidPlan) {
+      return c.json({ error: `Order edit window configuration requires the Basic plan or higher.` }, 403)
+    }
+
+    // Social links are Premium only
+    if (data.socialLinks !== undefined && !isPremium) {
+      return c.json({ error: `Social links require the Premium plan.` }, 403)
+    }
+
     await db
       .update(organizationProfile)
-      .set({ ...data, updatedAt: new Date() })
+      .set({
+        ...data,
+        taxRate: data.taxRate !== undefined ? String(data.taxRate) : undefined,
+        serviceChargeRate: data.serviceChargeRate !== undefined ? String(data.serviceChargeRate) : undefined,
+        updatedAt: new Date(),
+      })
       .where(eq(organizationProfile.organizationId, orgId))
 
     return c.json({ message: 'Profile updated.' })
@@ -337,11 +376,12 @@ adminRouter.post('/menu', zValidator('json', createMenuItemSchema), async (c) =>
   }
 
   const id = crypto.randomUUID()
+  const { price, ...rest } = data
   await db.insert(menuItem).values({
     id,
     organizationId: orgId,
-    price: String(data.price),
-    ...data,
+    price: String(price),
+    ...rest,
   })
 
   const created = await db.select().from(menuItem).where(eq(menuItem.id, id)).limit(1)
@@ -692,6 +732,321 @@ adminRouter.get('/members', async (c) => {
     .where(eq(member.organizationId, orgId))
 
   return c.json({ members })
+})
+
+// ─── Waiter Management (Premium plan only) ────────────────────────────────────
+
+adminRouter.get('/waiters', requireOrgAdmin, async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers })
+  const orgId = (session as any)?.session?.activeOrganizationId
+  if (!orgId) return c.json({ error: 'No active organization.' }, 400)
+
+  const [profile] = await db.select().from(organizationProfile)
+    .where(eq(organizationProfile.organizationId, orgId)).limit(1)
+  if (profile?.subscriptionPlan !== 'premium')
+    return c.json({ error: 'Waiter management requires the Premium plan.' }, 403)
+
+  const rows = await db
+    .select({
+      id: waiterAssignment.id,
+      userId: waiterAssignment.userId,
+      tableIds: waiterAssignment.tableIds,
+      isActive: waiterAssignment.isActive,
+      dutyStatus: waiterAssignment.dutyStatus,
+      createdAt: waiterAssignment.createdAt,
+      name: user.name,
+      email: user.email,
+    })
+    .from(waiterAssignment)
+    .innerJoin(user, eq(waiterAssignment.userId, user.id))
+    .where(eq(waiterAssignment.organizationId, orgId))
+    .orderBy(desc(waiterAssignment.createdAt))
+
+  return c.json(rows.map(r => ({ ...r, tableIds: JSON.parse(r.tableIds || '[]') })))
+})
+
+adminRouter.post('/waiters', requireOrgAdmin, zValidator('json', createWaiterSchema), async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers })
+  const orgId = (session as any)?.session?.activeOrganizationId
+  if (!orgId) return c.json({ error: 'No active organization.' }, 400)
+
+  const [profile] = await db.select().from(organizationProfile)
+    .where(eq(organizationProfile.organizationId, orgId)).limit(1)
+  if (profile?.subscriptionPlan !== 'premium')
+    return c.json({ error: 'Waiter management requires the Premium plan.' }, 403)
+
+  const { name, email, tableIds } = c.req.valid('json')
+
+  // Auto-generate a temporary password — admin shows it once in the UI
+  const generatedPassword = crypto.randomUUID().slice(0, 8).toUpperCase() +
+    crypto.randomUUID().slice(0, 4) + '!1'
+
+  // Check for existing user with that email
+  const [existing] = await db.select().from(user).where(eq(user.email, email)).limit(1)
+  if (existing) return c.json({ error: 'A user with that email already exists.' }, 409)
+
+  // Create better-auth user
+  const created = await auth.api.signUpEmail({
+    body: { name, email, password: generatedPassword },
+    headers: c.req.raw.headers,
+  })
+  if (!created?.user) return c.json({ error: 'Failed to create waiter account.' }, 400)
+
+  // Set role to waiter
+  await db.update(user).set({ role: 'waiter' }).where(eq(user.id, created.user.id))
+
+  // Create assignment
+  const [assignment] = await db
+    .insert(waiterAssignment)
+    .values({
+      organizationId: orgId,
+      userId: created.user.id,
+      tableIds: JSON.stringify(tableIds),
+      isActive: true,
+    })
+    .returning()
+
+  log.info('admin:waiter-created', { waiterId: created.user.id, orgId })
+
+  return c.json({
+    message: 'Waiter created. Share these credentials once — they cannot be recovered.',
+    waiterId: created.user.id,
+    assignmentId: assignment.id,
+    credentials: { email, password: generatedPassword },
+  }, 201)
+})
+
+// ─── POST /admin/waiters/:id/regenerate-credentials ─────────────────────────
+// Generates a new password for a waiter and returns it once. Use when a
+// waiter forgets their password — they must change it after first login.
+
+adminRouter.post('/waiters/:id/regenerate-credentials', requireOrgAdmin, async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers })
+  const orgId = (session as any)?.session?.activeOrganizationId
+  if (!orgId) return c.json({ error: 'No active organization.' }, 400)
+
+  const assignmentId = c.req.param('id') as string
+
+  const [assignment] = await db.select().from(waiterAssignment)
+    .where(and(eq(waiterAssignment.id, assignmentId), eq(waiterAssignment.organizationId, orgId)))
+    .limit(1)
+  if (!assignment) return c.json({ error: 'Waiter assignment not found.' }, 404)
+
+  const [waiterUser] = await db.select().from(user).where(eq(user.id, assignment.userId)).limit(1)
+  if (!waiterUser) return c.json({ error: 'Waiter user not found.' }, 404)
+
+  const newPassword = crypto.randomUUID().slice(0, 8).toUpperCase() +
+    crypto.randomUUID().slice(0, 4) + '!1'
+
+  // Use better-auth admin plugin to set password
+  await auth.api.setPassword({
+    body: { newPassword, userId: waiterUser.id },
+    headers: c.req.raw.headers,
+  } as any)
+
+  log.info('admin:waiter-credentials-regenerated', { waiterId: waiterUser.id, orgId })
+
+  return c.json({
+    message: 'New credentials generated. Share these once — they cannot be recovered.',
+    credentials: { email: waiterUser.email, password: newPassword },
+  })
+})
+
+adminRouter.patch('/waiters/:id', requireOrgAdmin, zValidator('json', updateWaiterSchema), async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers })
+  const orgId = (session as any)?.session?.activeOrganizationId
+  if (!orgId) return c.json({ error: 'No active organization.' }, 400)
+
+  const assignmentId = c.req.param('id') as string
+  const data = c.req.valid('json')
+
+  const [assignment] = await db.select().from(waiterAssignment)
+    .where(and(eq(waiterAssignment.id, assignmentId), eq(waiterAssignment.organizationId, orgId)))
+    .limit(1)
+  if (!assignment) return c.json({ error: 'Waiter assignment not found.' }, 404)
+
+  const updates: Record<string, unknown> = { updatedAt: new Date() }
+  if (data.tableIds !== undefined) updates.tableIds = JSON.stringify(data.tableIds)
+  if (data.isActive !== undefined) updates.isActive = data.isActive
+
+  if (data.name !== undefined)
+    await db.update(user).set({ name: data.name }).where(eq(user.id, assignment.userId))
+
+  const [updated] = await db
+    .update(waiterAssignment)
+    .set(updates)
+    .where(eq(waiterAssignment.id, assignmentId))
+    .returning()
+
+  return c.json({ message: 'Waiter updated.', assignment: updated })
+})
+
+adminRouter.delete('/waiters/:id', requireOrgAdmin, async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers })
+  const orgId = (session as any)?.session?.activeOrganizationId
+  if (!orgId) return c.json({ error: 'No active organization.' }, 400)
+
+  const assignmentId = c.req.param('id') as string
+
+  const [assignment] = await db.select().from(waiterAssignment)
+    .where(and(eq(waiterAssignment.id, assignmentId), eq(waiterAssignment.organizationId, orgId)))
+    .limit(1)
+  if (!assignment) return c.json({ error: 'Waiter assignment not found.' }, 404)
+
+  await db.update(waiterAssignment)
+    .set({ isActive: false, updatedAt: new Date() })
+    .where(eq(waiterAssignment.id, assignmentId))
+
+  return c.json({ message: 'Waiter deactivated.' })
+})
+
+// ─── GET /admin/waiters/:id ───────────────────────────────────────────────────
+// Full waiter profile: duty status, assigned tables (with names), covered tables
+// and a live order count broken down by status.
+
+adminRouter.get('/waiters/:id', requireOrgAdmin, async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers })
+  const orgId = (session as any)?.session?.activeOrganizationId
+  if (!orgId) return c.json({ error: 'No active organization.' }, 400)
+
+  const [profile] = await db.select().from(organizationProfile)
+    .where(eq(organizationProfile.organizationId, orgId)).limit(1)
+  if (profile?.subscriptionPlan !== 'premium')
+    return c.json({ error: 'Waiter management requires the Premium plan.' }, 403)
+
+  const assignmentId = c.req.param('id') as string
+
+  const [row] = await db
+    .select({
+      id: waiterAssignment.id,
+      userId: waiterAssignment.userId,
+      tableIds: waiterAssignment.tableIds,
+      isActive: waiterAssignment.isActive,
+      dutyStatus: waiterAssignment.dutyStatus,
+      createdAt: waiterAssignment.createdAt,
+      updatedAt: waiterAssignment.updatedAt,
+      name: user.name,
+      email: user.email,
+    })
+    .from(waiterAssignment)
+    .innerJoin(user, eq(waiterAssignment.userId, user.id))
+    .where(and(
+      eq(waiterAssignment.id, assignmentId),
+      eq(waiterAssignment.organizationId, orgId),
+    ))
+    .limit(1)
+
+  if (!row) return c.json({ error: 'Waiter not found.' }, 404)
+
+  const tableIds: string[] = JSON.parse(row.tableIds || '[]')
+
+  // Fetch assigned table details
+  const tables = tableIds.length > 0
+    ? await db
+        .select({ id: restaurantTable.id, name: restaurantTable.name, capacity: restaurantTable.capacity, location: restaurantTable.location, isActive: restaurantTable.isActive })
+        .from(restaurantTable)
+        .where(and(eq(restaurantTable.organizationId, orgId), inArray(restaurantTable.id, tableIds)))
+    : []
+
+  // Live order counts per status for this waiter's tables
+  const orderCounts = tableIds.length > 0
+    ? await db
+        .select({ status: order.status, count: count() })
+        .from(order)
+        .where(and(
+          eq(order.organizationId, orgId),
+          inArray(order.tableId as any, tableIds),
+        ))
+        .groupBy(order.status)
+    : []
+
+  const orderCountMap = Object.fromEntries(orderCounts.map(r => [r.status, Number(r.count)]))
+
+  return c.json({
+    ...row,
+    tableIds,
+    assignedTables: tables,
+    liveOrderCounts: {
+      pending:    orderCountMap['pending']    ?? 0,
+      confirmed:  orderCountMap['confirmed']  ?? 0,
+      preparing:  orderCountMap['preparing']  ?? 0,
+      ready:      orderCountMap['ready']      ?? 0,
+      served:     orderCountMap['served']     ?? 0,
+      cancelled:  orderCountMap['cancelled']  ?? 0,
+    },
+  })
+})
+
+// ─── GET /admin/waiters/:id/orders ────────────────────────────────────────────
+// All orders that belong to the waiter's assigned tables.
+// Query params:
+//   status  — comma-separated filter (default: all)
+//   from    — ISO date string, e.g. 2025-01-01
+//   to      — ISO date string
+//   limit   — max rows, default 100
+
+adminRouter.get('/waiters/:id/orders', requireOrgAdmin, async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers })
+  const orgId = (session as any)?.session?.activeOrganizationId
+  if (!orgId) return c.json({ error: 'No active organization.' }, 400)
+
+  const [profile] = await db.select().from(organizationProfile)
+    .where(eq(organizationProfile.organizationId, orgId)).limit(1)
+  if (profile?.subscriptionPlan !== 'premium')
+    return c.json({ error: 'Waiter management requires the Premium plan.' }, 403)
+
+  const assignmentId = c.req.param('id') as string
+
+  const [assignment] = await db.select().from(waiterAssignment)
+    .where(and(eq(waiterAssignment.id, assignmentId), eq(waiterAssignment.organizationId, orgId)))
+    .limit(1)
+  if (!assignment) return c.json({ error: 'Waiter not found.' }, 404)
+
+  const tableIds: string[] = JSON.parse(assignment.tableIds || '[]')
+  if (tableIds.length === 0) return c.json([])
+
+  // Parse query params
+  const statusParam  = c.req.query('status')
+  const fromParam    = c.req.query('from')
+  const toParam      = c.req.query('to')
+  const limitParam   = parseInt(c.req.query('limit') ?? '100', 10)
+
+  const conditions: any[] = [
+    eq(order.organizationId, orgId),
+    inArray(order.tableId as any, tableIds),
+  ]
+
+  if (statusParam)
+    conditions.push(inArray(order.status, statusParam.split(',') as any[]))
+  if (fromParam)
+    conditions.push(gte(order.createdAt, new Date(fromParam)))
+  if (toParam)
+    conditions.push(lte(order.createdAt, new Date(toParam)))
+
+  const orders = await db
+    .select()
+    .from(order)
+    .where(and(...conditions as [any, ...any[]]))
+    .orderBy(desc(order.createdAt))
+    .limit(Math.min(limitParam, 500))
+
+  if (orders.length === 0) return c.json([])
+
+  const orderIds = orders.map(o => o.id)
+  const items = await db
+    .select()
+    .from(orderItem)
+    .where(inArray(orderItem.orderId, orderIds))
+
+  const itemsByOrder = items.reduce((acc, item) => {
+    ;(acc[item.orderId] ??= []).push(item)
+    return acc
+  }, {} as Record<string, typeof items>)
+
+  return c.json(orders.map(o => ({
+    ...o,
+    items: itemsByOrder[o.id] ?? [],
+  })))
 })
 
 export { adminRouter }

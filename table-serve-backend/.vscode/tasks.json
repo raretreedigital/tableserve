@@ -1,0 +1,12 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Backend: dev",
+			"type": "shell",
+			"command": "bun run dev",
+			"isBackground": true,
+			"problemMatcher": []
+		}
+	]
+}

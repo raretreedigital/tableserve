@@ -27,6 +27,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      loki:
+        condition: service_started
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-tableserve}:${POSTGRES_PASSWORD:-tableserve}@db:5432/${POSTGRES_DB:-tableserve}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
@@ -35,8 +37,43 @@ services:
       MASTER_PASSWORD: ${MASTER_PASSWORD}
       TABLE_SESSION_SECRET: ${TABLE_SESSION_SECRET}
       PORT: 3000
+      LOKI_URL: http://loki:3100
+      LOKI_ENABLED: "true"
+      NODE_ENV: production
     ports:
       - "${BACKEND_PORT:-3000}:3000"
+    networks:
+      - internal
+      - public
+
+  # ── Grafana Loki (log aggregation) ───────────────────────────────────────────
+  loki:
+    image: grafana/loki:2.9.10
+    restart: unless-stopped
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    networks:
+      - internal
+
+  # ── Grafana (dashboards — free OSS) ──────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.2
+    restart: unless-stopped
+    depends_on:
+      - loki
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "${GRAFANA_PORT:-3200}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
     networks:
       - internal
       - public
@@ -64,6 +101,8 @@ services:
 
 volumes:
   postgres_data:
+  loki_data:
+  grafana_data:
 
 networks:
   internal:
