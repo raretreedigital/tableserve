@@ -1,0 +1,1018 @@
+openapi: 3.1.0
+info:
+  title: Table Serve API
+  description: |
+    REST API for the Table Serve platform - an NFC-based restaurant menu and ordering system.
+
+    Three access levels:
+    - **Super Admin** - Platform administrators (Table Serve company). Requires master password to register.
+    - **Admin** - Restaurant owners and managers managing their menu, tables, and analytics.
+    - **Customer** - Public-facing API for NFC-scanned menu viewing and order placement.
+  version: 1.0.0
+  contact:
+    name: Table Serve Support
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+  - url: https://api.tableserve.app
+    description: Production
+
+tags:
+  - name: Auth
+    description: Authentication endpoints (powered by better-auth)
+  - name: Super Admin
+    description: Platform administration endpoints
+  - name: Admin
+    description: Restaurant management endpoints
+  - name: Customer
+    description: Public customer-facing endpoints
+
+paths:
+
+  # ─── Health ────────────────────────────────
+
+  /health:
+    get:
+      summary: Health check
+      operationId: getHealth
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  # ─── Auth (better-auth) ────────────────────
+
+  /api/auth/sign-up/email:
+    post:
+      tags: [Auth]
+      summary: Sign up with email
+      operationId: signUpEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, name]
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+      responses:
+        '200':
+          description: Signed up successfully
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/auth/sign-in/email:
+    post:
+      tags: [Auth]
+      summary: Sign in with email
+      operationId: signInEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Signed in successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/auth/sign-out:
+    post:
+      tags: [Auth]
+      summary: Sign out
+      operationId: signOut
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Signed out successfully
+
+  /api/auth/get-session:
+    get:
+      tags: [Auth]
+      summary: Get current session
+      operationId: getSession
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Current session and user
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ─── Super Admin ───────────────────────────
+
+  /api/superadmin/register:
+    post:
+      tags: [Super Admin]
+      summary: Register a super admin account
+      description: Requires the master password configured on the server.
+      operationId: registerSuperAdmin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterSuperAdminRequest'
+      responses:
+        '201':
+          description: Super admin registered
+        '403':
+          description: Invalid master password
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /api/superadmin/stats:
+    get:
+      tags: [Super Admin]
+      summary: Platform-wide statistics
+      operationId: getSuperAdminStats
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: Platform statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformStats'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/superadmin/organizations:
+    get:
+      tags: [Super Admin]
+      summary: List all organizations
+      operationId: listOrganizations
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: List of organizations
+    post:
+      tags: [Super Admin]
+      summary: Create organization with owner
+      operationId: createOrganization
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrganizationRequest'
+      responses:
+        '201':
+          description: Organization created
+        '409':
+          description: Slug already taken
+
+  /api/superadmin/organizations/{id}:
+    get:
+      tags: [Super Admin]
+      summary: Get organization details
+      operationId: getOrganization
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Organization details
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Super Admin]
+      summary: Delete an organization
+      operationId: deleteOrganization
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Organization deleted
+
+  /api/superadmin/organizations/{id}/suspend:
+    patch:
+      tags: [Super Admin]
+      summary: Suspend an organization
+      operationId: suspendOrganization
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Organization suspended
+
+  /api/superadmin/organizations/{id}/activate:
+    patch:
+      tags: [Super Admin]
+      summary: Activate a suspended organization
+      operationId: activateOrganization
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Organization activated
+
+  /api/superadmin/organizations/{id}/subscription:
+    patch:
+      tags: [Super Admin]
+      summary: Update organization subscription
+      operationId: updateSubscription
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan]
+              properties:
+                plan:
+                  type: string
+                  enum: [free, basic, premium]
+                expiryDays:
+                  type: integer
+      responses:
+        '200':
+          description: Subscription updated
+
+  /api/superadmin/analytics:
+    get:
+      tags: [Super Admin]
+      summary: Platform-wide analytics
+      operationId: getSuperAdminAnalytics
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/PeriodQuery'
+      responses:
+        '200':
+          description: Analytics data
+
+  /api/superadmin/users:
+    get:
+      tags: [Super Admin]
+      summary: List all users
+      operationId: listUsers
+      security:
+        - cookieAuth: []
+      responses:
+        '200':
+          description: List of users
+
+  /api/superadmin/users/{id}/ban:
+    patch:
+      tags: [Super Admin]
+      summary: Ban a user
+      operationId: banUser
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: User banned
+
+  /api/superadmin/users/{id}/unban:
+    patch:
+      tags: [Super Admin]
+      summary: Unban a user
+      operationId: unbanUser
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: User unbanned
+
+  # ─── Admin ─────────────────────────────────
+
+  /api/admin/register:
+    post:
+      tags: [Admin]
+      summary: Register restaurant admin account
+      operationId: registerAdmin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterAdminRequest'
+      responses:
+        '201':
+          description: Account and organization created
+        '409':
+          description: Slug already taken
+
+  /api/admin/dashboard:
+    get:
+      tags: [Admin]
+      summary: Admin dashboard stats
+      operationId: getAdminDashboard
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        '200':
+          description: Dashboard data
+
+  /api/admin/profile:
+    get:
+      tags: [Admin]
+      summary: Get organization profile
+      operationId: getAdminProfile
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        '200':
+          description: Organization profile
+    patch:
+      tags: [Admin]
+      summary: Update organization profile and customizations
+      operationId: updateAdminProfile
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateOrganizationProfileRequest'
+      responses:
+        '200':
+          description: Profile updated
+
+  /api/admin/categories:
+    get:
+      tags: [Admin]
+      summary: List menu categories
+      operationId: listCategories
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        '200':
+          description: List of categories
+    post:
+      tags: [Admin]
+      summary: Create menu category
+      operationId: createCategory
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMenuCategoryRequest'
+      responses:
+        '201':
+          description: Category created
+
+  /api/admin/categories/{id}:
+    patch:
+      tags: [Admin]
+      summary: Update menu category
+      operationId: updateCategory
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        '200':
+          description: Category updated
+    delete:
+      tags: [Admin]
+      summary: Delete menu category
+      operationId: deleteCategory
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        '200':
+          description: Category deleted
+
+  /api/admin/menu:
+    get:
+      tags: [Admin]
+      summary: List menu items
+      operationId: listMenuItems
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        '200':
+          description: List of menu items
+    post:
+      tags: [Admin]
+      summary: Create menu item
+      operationId: createMenuItem
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMenuItemRequest'
+      responses:
+        '201':
+          description: Menu item created
+        '403':
+          description: Plan limit reached
+
+  /api/admin/menu/{id}:
+    patch:
+      tags: [Admin]
+      summary: Update menu item
+      operationId: updateMenuItem
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        '200':
+          description: Menu item updated
+    delete:
+      tags: [Admin]
+      summary: Deactivate menu item
+      operationId: deleteMenuItem
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        '200':
+          description: Menu item deactivated
+
+  /api/admin/tables:
+    get:
+      tags: [Admin]
+      summary: List restaurant tables
+      operationId: listTables
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        '200':
+          description: List of tables
+    post:
+      tags: [Admin]
+      summary: Create restaurant table (generates NFC token)
+      operationId: createTable
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        '201':
+          description: Table created with NFC token
+
+  /api/admin/tables/{id}:
+    patch:
+      tags: [Admin]
+      summary: Update table
+      operationId: updateTable
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        '200':
+          description: Table updated
+    delete:
+      tags: [Admin]
+      summary: Delete table
+      operationId: deleteTable
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        '200':
+          description: Table deleted
+
+  /api/admin/orders:
+    get:
+      tags: [Admin]
+      summary: List orders
+      operationId: listOrders
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, confirmed, preparing, ready, served, cancelled]
+      responses:
+        '200':
+          description: List of orders
+
+  /api/admin/orders/{id}:
+    get:
+      tags: [Admin]
+      summary: Get order details
+      operationId: getOrder
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        '200':
+          description: Order details
+
+  /api/admin/orders/{id}/status:
+    patch:
+      tags: [Admin]
+      summary: Update order status
+      operationId: updateOrderStatus
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+        - $ref: '#/components/parameters/OrgIdHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [pending, confirmed, preparing, ready, served, cancelled]
+      responses:
+        '200':
+          description: Order status updated
+
+  /api/admin/analytics:
+    get:
+      tags: [Admin]
+      summary: Restaurant analytics
+      operationId: getAdminAnalytics
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+        - $ref: '#/components/parameters/PeriodQuery'
+      responses:
+        '200':
+          description: Analytics data
+
+  /api/admin/members:
+    get:
+      tags: [Admin]
+      summary: List organization members
+      operationId: listMembers
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/OrgIdHeader'
+      responses:
+        '200':
+          description: List of members
+
+  # ─── Customer ──────────────────────────────
+
+  /api/customer/table/{token}:
+    get:
+      tags: [Customer]
+      summary: Resolve NFC table token to restaurant and table info
+      operationId: resolveTableToken
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Table and organization info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TableResolveResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/customer/menu/{organizationId}:
+    get:
+      tags: [Customer]
+      summary: Get menu for a restaurant
+      operationId: getCustomerMenu
+      parameters:
+        - name: organizationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Menu categories and items
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/customer/orders:
+    post:
+      tags: [Customer]
+      summary: Place an order
+      operationId: placeOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+      responses:
+        '201':
+          description: Order placed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  orderId:
+                    type: string
+                  totalAmount:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          description: Restaurant not accepting orders
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/customer/orders/{id}:
+    get:
+      tags: [Customer]
+      summary: Get order status
+      operationId: getOrderStatus
+      parameters:
+        - $ref: '#/components/parameters/IdPath'
+      responses:
+        '200':
+          description: Order details and status
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: better-auth.session_token
+
+  parameters:
+    IdPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+
+    OrgIdHeader:
+      name: x-organization-id
+      in: header
+      required: false
+      description: Organization ID context (not required if session has active organization)
+      schema:
+        type: string
+
+    PeriodQuery:
+      name: period
+      in: query
+      schema:
+        type: string
+        enum: [today, week, month, quarter, year, custom]
+        default: month
+
+  responses:
+    BadRequest:
+      description: Validation error or bad input
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Not authenticated
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+
+    RegisterSuperAdminRequest:
+      type: object
+      required: [name, email, password, masterPassword]
+      properties:
+        name:
+          type: string
+          minLength: 2
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        masterPassword:
+          type: string
+
+    RegisterAdminRequest:
+      type: object
+      required: [name, email, password, organizationName, organizationSlug]
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        organizationName:
+          type: string
+        organizationSlug:
+          type: string
+          pattern: '^[a-z0-9-]+$'
+
+    CreateOrganizationRequest:
+      type: object
+      required: [name, slug, ownerEmail, ownerName, ownerPassword]
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+        ownerEmail:
+          type: string
+          format: email
+        ownerName:
+          type: string
+        ownerPassword:
+          type: string
+          minLength: 8
+
+    UpdateOrganizationProfileRequest:
+      type: object
+      properties:
+        address:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+          format: email
+        website:
+          type: string
+        description:
+          type: string
+        primaryColor:
+          type: string
+          pattern: '^#[0-9a-fA-F]{6}$'
+        secondaryColor:
+          type: string
+        accentColor:
+          type: string
+        fontFamily:
+          type: string
+          enum: [Inter, Roboto, Poppins, 'Playfair Display', Lato, Montserrat]
+        menuLayout:
+          type: string
+          enum: [grid, list]
+        showCalories:
+          type: boolean
+        showAllergens:
+          type: boolean
+        showPreparationTime:
+          type: boolean
+        showSpiceLevel:
+          type: boolean
+        currencySymbol:
+          type: string
+        currencyCode:
+          type: string
+          minLength: 3
+          maxLength: 3
+        taxRate:
+          type: number
+        serviceChargeRate:
+          type: number
+        welcomeMessage:
+          type: string
+        footerText:
+          type: string
+
+    CreateMenuCategoryRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        imageUrl:
+          type: string
+        sortOrder:
+          type: integer
+
+    CreateMenuItemRequest:
+      type: object
+      required: [name, price]
+      properties:
+        categoryId:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+        imageUrl:
+          type: string
+        isChefSpecial:
+          type: boolean
+        isVegetarian:
+          type: boolean
+        isVegan:
+          type: boolean
+        isGlutenFree:
+          type: boolean
+        spiceLevel:
+          type: string
+          enum: [none, mild, medium, hot]
+        allergens:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+        preparationTime:
+          type: integer
+        calories:
+          type: integer
+        sortOrder:
+          type: integer
+
+    CreateOrderRequest:
+      type: object
+      required: [tableToken, items]
+      properties:
+        tableToken:
+          type: string
+        customerName:
+          type: string
+        customerPhone:
+          type: string
+        notes:
+          type: string
+        items:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [menuItemId, quantity]
+            properties:
+              menuItemId:
+                type: string
+              quantity:
+                type: integer
+                minimum: 1
+              notes:
+                type: string
+
+    TableResolveResponse:
+      type: object
+      properties:
+        table:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            organizationId:
+              type: string
+        organization:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            primaryColor:
+              type: string
+            accentColor:
+              type: string
+            welcomeMessage:
+              type: string
+
+    PlatformStats:
+      type: object
+      properties:
+        organizations:
+          type: integer
+        activeOrganizations:
+          type: integer
+        suspendedOrganizations:
+          type: integer
+        users:
+          type: integer
+        orders:
+          type: integer
+        totalRevenue:
+          type: string
