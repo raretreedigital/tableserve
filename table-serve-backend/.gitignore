@@ -1,2 +1,34 @@
-# deps
+# Dependencies
 node_modules/
+bun.lock
+package-lock.json
+yarn.lock
+
+# Environment variables — NEVER commit these
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+build/
+.output/
+
+# Drizzle generated migrations (keep schema, ignore generated sql if desired)
+# drizzle/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+bun-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
