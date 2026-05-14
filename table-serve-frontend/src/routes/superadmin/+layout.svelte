@@ -31,12 +31,10 @@
     },
   ]
 
-  let user = $derived($authStore.user)
-  let initialized = $derived($authStore.initialized)
-
   onMount(() => {
     const unsub = authStore.subscribe((state) => {
-      if (state.initialized && (!state.user || state.user.role !== 'superadmin')) {
+      if (state.loading || !state.initialized) return
+      if (!state.user || state.user.role !== 'superadmin') {
         goto('/superadmin/login')
       }
     })
@@ -51,20 +49,22 @@
   }
 </script>
 
-{#if !initialized}
+{#if $authStore.loading}
   <div class="min-h-screen flex items-center justify-center bg-neutral-50 dark:bg-neutral-950">
     <div class="animate-spin w-8 h-8 border-2 border-brand-600 border-t-transparent rounded-full"></div>
   </div>
-{:else if user?.role === 'superadmin'}
+{:else if $authStore.user?.role === 'superadmin'}
   <div class="flex min-h-screen bg-neutral-50 dark:bg-neutral-950">
     <Sidebar
       {navItems}
       title="Super Admin"
-      user={user ? { name: user.name, email: user.email, role: 'Super Admin' } : undefined}
+      user={$authStore.user ? { name: $authStore.user.name, email: $authStore.user.email, role: 'Super Admin' } : undefined}
       onsignout={signOut}
     />
     <main class="flex-1 min-w-0 overflow-auto">
       {@render children()}
     </main>
   </div>
+{:else}
+  {@render children()}
 {/if}

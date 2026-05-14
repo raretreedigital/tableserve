@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { zValidator } from '@hono/zod-validator'
+import { zv, zvq } from '../lib/zv'
 import { eq, and, desc, asc, gte, lte, sql, sum, count, avg, inArray } from 'drizzle-orm'
 import { db } from '../db'
 import {
@@ -14,9 +14,11 @@ import {
   user,
   waiterAssignment,
 } from '../db/schema'
-import { requireOrgAdmin } from '../middleware/auth-middleware'
+import { requireOrgAdmin, requireActiveSubscription } from '../middleware/auth-middleware'
 import { auth } from '../lib/auth'
 import { log } from '../lib/logger'
+import { env } from '../lib/env'
+import { sendWelcomeEmail, sendNewOrganizationNotification } from '../lib/email'
 import {
   registerAdminSchema,
   updateOrganizationProfileSchema,
@@ -36,7 +38,7 @@ const adminRouter = new Hono<{ Variables: { user: any } }>()
 
 // ─── Register admin + org ────────────────────
 
-adminRouter.post('/register', zValidator('json', registerAdminSchema), async (c) => {
+adminRouter.post('/register', zv(registerAdminSchema), async (c) => {
   const { name, email, password, organizationName, organizationSlug } = c.req.valid('json')
 
   const existing = await db
@@ -79,13 +81,44 @@ adminRouter.post('/register', zValidator('json', registerAdminSchema), async (c)
       createdAt: new Date(),
     })
 
+    // Send welcome email (fire-and-forget)
+    sendWelcomeEmail({
+      adminName: name,
+      adminEmail: email,
+      organizationName,
+      loginUrl: `${env.FRONTEND_URLS[0]}/admin/login`,
+    }).catch(() => {})
+
+    // Notify internal team of new registration (fire-and-forget)
+    sendNewOrganizationNotification({
+      organizationName,
+      adminName: name,
+      adminEmail: email,
+    }).catch(() => {})
+
     return c.json(
-      { message: 'Account and organization created.', organizationId: orgId },
+      { message: 'Account and organization created. Please verify your email before signing in.', organizationId: orgId },
       201
     )
   } catch (err: any) {
     return c.json({ error: err.message ?? 'Registration failed.' }, 400)
   }
+})
+
+// ─── My Org (no org header required) ────────
+// Returns the org ID for the currently authenticated user
+adminRouter.get('/my-org', async (c) => {
+  const session = await auth.api.getSession({ headers: c.req.raw.headers })
+  if (!session) return c.json({ error: 'Authentication required.' }, 401)
+
+  const rows = await db
+    .select({ organizationId: member.organizationId, role: member.role })
+    .from(member)
+    .where(eq(member.userId, session.user.id))
+    .limit(1)
+
+  if (!rows.length) return c.json({ error: 'No organization found.' }, 404)
+  return c.json({ organizationId: rows[0].organizationId })
 })
 
 // All routes below require auth + org membership
@@ -105,6 +138,80 @@ async function verifyOrgAccess(userId: string, orgId: string) {
     .limit(1)
   return m.length > 0 ? m[0] : null
 }
+
+// ─── Subscription status ────────────────────
+
+adminRouter.get('/subscription', async (c) => {
+  const orgId = getOrgId(c)
+  const currentUser = c.get('user') as any
+
+  if (currentUser.role !== 'superadmin') {
+    const access = await verifyOrgAccess(currentUser.id, orgId)
+    if (!access) return c.json({ error: 'Access denied.' }, 403)
+  }
+
+  const [profile] = await db
+    .select({
+      status: organizationProfile.status,
+      plan: organizationProfile.subscriptionPlan,
+      expiry: organizationProfile.subscriptionExpiry,
+    })
+    .from(organizationProfile)
+    .where(eq(organizationProfile.organizationId, orgId))
+    .limit(1)
+
+  if (!profile) return c.json({ error: 'Organization not found.' }, 404)
+
+  const isActive = profile.status === 'active'
+  const isSuspended = profile.status === 'suspended'
+
+  return c.json({
+    status: profile.status,
+    plan: profile.plan,
+    expiry: profile.expiry,
+    isActive,
+    isSuspended,
+    // Feature flags based on subscription
+    features: {
+      analytics: !isSuspended,
+      waiterManagement: isActive,
+      unlimitedMenuItems: isActive,
+      unlimitedTables: isActive,
+    },
+    limits: isActive ? null : {
+      menuItems: 10,
+      tables: 3,
+    },
+  })
+})
+
+// ─── KDS Token ───────────────────────────────
+
+adminRouter.get('/kds-token', requireOrgAdmin, async (c) => {
+  const orgId = getOrgId(c)
+  const [profile] = await db
+    .select({ kdsToken: organizationProfile.kdsToken })
+    .from(organizationProfile)
+    .where(eq(organizationProfile.organizationId, orgId))
+    .limit(1)
+  if (!profile) return c.json({ error: 'Organization not found.' }, 404)
+
+  // Auto-generate if not set
+  let token = profile.kdsToken
+  if (!token) {
+    token = crypto.randomUUID() + '-' + crypto.randomUUID()
+    await db.update(organizationProfile).set({ kdsToken: token, updatedAt: new Date() }).where(eq(organizationProfile.organizationId, orgId))
+  }
+
+  return c.json({ kdsToken: token, kdsUrl: `/kds/${token}` })
+})
+
+adminRouter.post('/kds-token/regenerate', requireOrgAdmin, async (c) => {
+  const orgId = getOrgId(c)
+  const token = crypto.randomUUID() + '-' + crypto.randomUUID()
+  await db.update(organizationProfile).set({ kdsToken: token, updatedAt: new Date() }).where(eq(organizationProfile.organizationId, orgId))
+  return c.json({ kdsToken: token, kdsUrl: `/kds/${token}` })
+})
 
 // ─── Dashboard ───────────────────────────────
 
@@ -165,6 +272,27 @@ adminRouter.get('/dashboard', async (c) => {
 
 // ─── Organization Profile ────────────────────
 
+// Update organization name
+adminRouter.patch('/organization-name', async (c) => {
+  const orgId = getOrgId(c)
+  const currentUser = c.get('user') as any
+
+  if (currentUser.role !== 'superadmin') {
+    const access = await verifyOrgAccess(currentUser.id, orgId)
+    if (!access || (access.role !== 'owner' && access.role !== 'admin')) {
+      return c.json({ error: 'Insufficient permissions.' }, 403)
+    }
+  }
+
+  const { name } = await c.req.json()
+  if (!name || typeof name !== 'string' || name.trim().length < 2) {
+    return c.json({ error: 'Organization name must be at least 2 characters.' }, 400)
+  }
+
+  await db.update(organization).set({ name: name.trim() }).where(eq(organization.id, orgId))
+  return c.json({ message: 'Organization name updated.' })
+})
+
 adminRouter.get('/profile', async (c) => {
   const orgId = getOrgId(c)
   const currentUser = c.get('user') as any
@@ -188,7 +316,7 @@ adminRouter.get('/profile', async (c) => {
 
 adminRouter.patch(
   '/profile',
-  zValidator('json', updateOrganizationProfileSchema),
+  zv(updateOrganizationProfileSchema),
   async (c) => {
     const orgId = getOrgId(c)
     const currentUser = c.get('user') as any
@@ -215,7 +343,7 @@ adminRouter.patch(
     const isPremium = plan === 'premium'
 
     // Branding fields are Basic+ only
-    const brandingFields = ['primaryColor', 'secondaryColor', 'accentColor', 'fontFamily', 'bannerUrl', 'logoUrl', 'welcomeMessage', 'footerText']
+    const brandingFields = ['primaryColor', 'secondaryColor', 'accentColor', 'fontFamily', 'bannerUrl', 'logoUrl', 'supportName', 'welcomeMessage', 'footerText']
     for (const field of brandingFields) {
       if ((data as any)[field] !== undefined && !isPaidPlan) {
         return c.json({ error: `Branding customization requires the Basic plan or higher. You are on the ${plan} plan.` }, 403)
@@ -238,6 +366,7 @@ adminRouter.patch(
         ...data,
         taxRate: data.taxRate !== undefined ? String(data.taxRate) : undefined,
         serviceChargeRate: data.serviceChargeRate !== undefined ? String(data.serviceChargeRate) : undefined,
+        supportName: data.supportName,
         updatedAt: new Date(),
       })
       .where(eq(organizationProfile.organizationId, orgId))
@@ -262,7 +391,7 @@ adminRouter.get('/categories', async (c) => {
 
 adminRouter.post(
   '/categories',
-  zValidator('json', createMenuCategorySchema),
+  zv(createMenuCategorySchema),
   async (c) => {
     const orgId = getOrgId(c)
     const data = c.req.valid('json')
@@ -286,7 +415,7 @@ adminRouter.post(
 
 adminRouter.patch(
   '/categories/:id',
-  zValidator('json', updateMenuCategorySchema),
+  zv(updateMenuCategorySchema),
   async (c) => {
     const orgId = getOrgId(c)
     const { id } = c.req.param()
@@ -350,7 +479,7 @@ adminRouter.get('/menu', async (c) => {
   return c.json({ items })
 })
 
-adminRouter.post('/menu', zValidator('json', createMenuItemSchema), async (c) => {
+adminRouter.post('/menu', zv(createMenuItemSchema), async (c) => {
   const orgId = getOrgId(c)
   const data = c.req.valid('json')
 
@@ -389,7 +518,7 @@ adminRouter.post('/menu', zValidator('json', createMenuItemSchema), async (c) =>
   return c.json({ item: created[0] }, 201)
 })
 
-adminRouter.patch('/menu/:id', zValidator('json', updateMenuItemSchema), async (c) => {
+adminRouter.patch('/menu/:id', zv(updateMenuItemSchema), async (c) => {
   const orgId = getOrgId(c)
   const { id } = c.req.param()
   const data = c.req.valid('json')
@@ -441,7 +570,7 @@ adminRouter.get('/tables', async (c) => {
   return c.json({ tables })
 })
 
-adminRouter.post('/tables', zValidator('json', createRestaurantTableSchema), async (c) => {
+adminRouter.post('/tables', zv(createRestaurantTableSchema), async (c) => {
   const orgId = getOrgId(c)
   const data = c.req.valid('json')
 
@@ -484,7 +613,7 @@ adminRouter.post('/tables', zValidator('json', createRestaurantTableSchema), asy
   return c.json({ table: created[0] }, 201)
 })
 
-adminRouter.patch('/tables/:id', zValidator('json', updateRestaurantTableSchema), async (c) => {
+adminRouter.patch('/tables/:id', zv(updateRestaurantTableSchema), async (c) => {
   const orgId = getOrgId(c)
   const { id } = c.req.param()
   const data = c.req.valid('json')
@@ -522,11 +651,45 @@ adminRouter.delete('/tables/:id', async (c) => {
   return c.json({ message: 'Table deleted.' })
 })
 
+// ─── End table session ───────────────────────
+
+adminRouter.post('/tables/:id/end-session', async (c) => {
+  const orgId = getOrgId(c)
+  const { id } = c.req.param()
+
+  const existing = await db
+    .select()
+    .from(restaurantTable)
+    .where(and(eq(restaurantTable.id, id), eq(restaurantTable.organizationId, orgId)))
+    .limit(1)
+
+  if (!existing.length) return c.json({ error: 'Table not found.' }, 404)
+
+  // Mark all active orders on this table as served
+  await db
+    .update(order)
+    .set({ status: 'served', updatedAt: new Date() })
+    .where(and(
+      eq(order.tableId, id),
+      inArray(order.status, ['pending', 'confirmed', 'preparing', 'ready'] as any[])
+    ))
+
+  // Clear bill requested flag and session timestamp — this immediately hides
+  // previous orders on the customer's My Orders panel even if their JWT is still valid.
+  await db
+    .update(restaurantTable)
+    .set({ billRequested: false, sessionStartedAt: null, updatedAt: new Date() })
+    .where(eq(restaurantTable.id, id))
+
+  return c.json({ message: 'Table session ended. All active orders marked as served.' })
+})
+
 // ─── Orders ──────────────────────────────────
 
 adminRouter.get('/orders', async (c) => {
   const orgId = getOrgId(c)
   const status = c.req.query('status')
+  const includeItems = c.req.query('include') === 'items'
 
   const conditions = [eq(order.organizationId, orgId)]
   if (status) {
@@ -534,13 +697,35 @@ adminRouter.get('/orders', async (c) => {
   }
 
   const orders = await db
-    .select()
+    .select({
+      id: order.id,
+      status: order.status,
+      totalAmount: order.totalAmount,
+      notes: order.notes,
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt,
+      tableId: order.tableId,
+      tableName: restaurantTable.name,
+    })
     .from(order)
+    .leftJoin(restaurantTable, eq(order.tableId, restaurantTable.id))
     .where(and(...conditions))
     .orderBy(desc(order.createdAt))
     .limit(100)
 
-  return c.json({ orders })
+  if (!includeItems) return c.json({ orders })
+
+  const orderIds = orders.map(o => o.id)
+  const items = orderIds.length
+    ? await db.select().from(orderItem).where(inArray(orderItem.orderId, orderIds))
+    : []
+
+  const itemsByOrder = items.reduce((acc, item) => {
+    ;(acc[item.orderId] ??= []).push(item)
+    return acc
+  }, {} as Record<string, typeof items>)
+
+  return c.json({ orders: orders.map(o => ({ ...o, items: itemsByOrder[o.id] ?? [] })) })
 })
 
 adminRouter.get('/orders/:id', async (c) => {
@@ -565,7 +750,7 @@ adminRouter.get('/orders/:id', async (c) => {
 
 adminRouter.patch(
   '/orders/:id/status',
-  zValidator('json', updateOrderStatusSchema),
+  zv(updateOrderStatusSchema),
   async (c) => {
     const orgId = getOrgId(c)
     const { id } = c.req.param()
@@ -590,7 +775,7 @@ adminRouter.patch(
 
 // ─── Analytics ───────────────────────────────
 
-adminRouter.get('/analytics', zValidator('query', analyticsQuerySchema), async (c) => {
+adminRouter.get('/analytics', zvq(analyticsQuerySchema), async (c) => {
   const orgId = getOrgId(c)
   const { period } = c.req.valid('query')
 
@@ -734,9 +919,84 @@ adminRouter.get('/members', async (c) => {
   return c.json({ members })
 })
 
-// ─── Waiter Management (Premium plan only) ────────────────────────────────────
+// Add a new staff member (create account + add to org)
+adminRouter.post('/members', async (c) => {
+  const orgId = getOrgId(c)
+  const currentUser = c.get('user') as any
+  const access = await verifyOrgAccess(currentUser.id, orgId)
+  if (!access || (access.role !== 'owner' && access.role !== 'admin')) {
+    return c.json({ error: 'Only owners and admins can add members.' }, 403)
+  }
 
-adminRouter.get('/waiters', requireOrgAdmin, async (c) => {
+  const { name, email, role = 'member' } = await c.req.json()
+  if (!name || !email) return c.json({ error: 'Name and email are required.' }, 400)
+  if (!['admin', 'member'].includes(role)) return c.json({ error: 'Role must be admin or member.' }, 400)
+
+  // Check if user already exists
+  const [existing] = await db.select().from(user).where(eq(user.email, email)).limit(1)
+
+  let userId: string
+  let generatedPassword: string | undefined
+
+  if (existing) {
+    // Check if already in this org
+    const [alreadyMember] = await db.select().from(member)
+      .where(and(eq(member.userId, existing.id), eq(member.organizationId, orgId))).limit(1)
+    if (alreadyMember) return c.json({ error: 'This user is already a member of your organization.' }, 409)
+    userId = existing.id
+  } else {
+    // Create account with auto-generated password
+    generatedPassword = crypto.randomUUID().slice(0, 8).toUpperCase() + crypto.randomUUID().slice(0, 4) + '!1'
+    const created = await auth.api.signUpEmail({
+      body: { name, email, password: generatedPassword },
+      headers: c.req.raw.headers,
+    })
+    if (!created?.user) return c.json({ error: 'Failed to create user account.' }, 400)
+    userId = created.user.id
+    // Mark email as verified so they can log in immediately
+    await db.update(user).set({ emailVerified: true }).where(eq(user.id, userId))
+  }
+
+  await db.insert(member).values({
+    id: crypto.randomUUID(),
+    organizationId: orgId,
+    userId,
+    role,
+    createdAt: new Date(),
+  })
+
+  return c.json({
+    message: generatedPassword
+      ? 'Staff member created. Share these credentials once — they cannot be recovered.'
+      : 'Existing user added to your organization.',
+    ...(generatedPassword ? { credentials: { email, password: generatedPassword } } : {}),
+  }, 201)
+})
+
+// Remove a member from the org
+adminRouter.delete('/members/:id', async (c) => {
+  const orgId = getOrgId(c)
+  const currentUser = c.get('user') as any
+  const { id } = c.req.param()
+
+  const access = await verifyOrgAccess(currentUser.id, orgId)
+  if (!access || (access.role !== 'owner' && access.role !== 'admin')) {
+    return c.json({ error: 'Only owners and admins can remove members.' }, 403)
+  }
+
+  const [m] = await db.select().from(member)
+    .where(and(eq(member.id, id), eq(member.organizationId, orgId))).limit(1)
+  if (!m) return c.json({ error: 'Member not found.' }, 404)
+  if (m.role === 'owner') return c.json({ error: 'Cannot remove the organization owner.' }, 403)
+  if (m.userId === currentUser.id) return c.json({ error: 'Cannot remove yourself.' }, 403)
+
+  await db.delete(member).where(eq(member.id, id))
+  return c.json({ message: 'Member removed.' })
+})
+
+// ─── Waiter Management (Active subscription only) ───────────────────────────
+
+adminRouter.get('/waiters', requireOrgAdmin, requireActiveSubscription, async (c) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers })
   const orgId = (session as any)?.session?.activeOrganizationId
   if (!orgId) return c.json({ error: 'No active organization.' }, 400)
@@ -765,15 +1025,10 @@ adminRouter.get('/waiters', requireOrgAdmin, async (c) => {
   return c.json(rows.map(r => ({ ...r, tableIds: JSON.parse(r.tableIds || '[]') })))
 })
 
-adminRouter.post('/waiters', requireOrgAdmin, zValidator('json', createWaiterSchema), async (c) => {
+adminRouter.post('/waiters', requireOrgAdmin, requireActiveSubscription, zv(createWaiterSchema), async (c) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers })
   const orgId = (session as any)?.session?.activeOrganizationId
   if (!orgId) return c.json({ error: 'No active organization.' }, 400)
-
-  const [profile] = await db.select().from(organizationProfile)
-    .where(eq(organizationProfile.organizationId, orgId)).limit(1)
-  if (profile?.subscriptionPlan !== 'premium')
-    return c.json({ error: 'Waiter management requires the Premium plan.' }, 403)
 
   const { name, email, tableIds } = c.req.valid('json')
 
@@ -820,7 +1075,7 @@ adminRouter.post('/waiters', requireOrgAdmin, zValidator('json', createWaiterSch
 // Generates a new password for a waiter and returns it once. Use when a
 // waiter forgets their password — they must change it after first login.
 
-adminRouter.post('/waiters/:id/regenerate-credentials', requireOrgAdmin, async (c) => {
+adminRouter.post('/waiters/:id/regenerate-credentials', requireOrgAdmin, requireActiveSubscription, async (c) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers })
   const orgId = (session as any)?.session?.activeOrganizationId
   if (!orgId) return c.json({ error: 'No active organization.' }, 400)
@@ -852,7 +1107,7 @@ adminRouter.post('/waiters/:id/regenerate-credentials', requireOrgAdmin, async (
   })
 })
 
-adminRouter.patch('/waiters/:id', requireOrgAdmin, zValidator('json', updateWaiterSchema), async (c) => {
+adminRouter.patch('/waiters/:id', requireOrgAdmin, requireActiveSubscription, zv(updateWaiterSchema), async (c) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers })
   const orgId = (session as any)?.session?.activeOrganizationId
   if (!orgId) return c.json({ error: 'No active organization.' }, 400)
@@ -881,7 +1136,7 @@ adminRouter.patch('/waiters/:id', requireOrgAdmin, zValidator('json', updateWait
   return c.json({ message: 'Waiter updated.', assignment: updated })
 })
 
-adminRouter.delete('/waiters/:id', requireOrgAdmin, async (c) => {
+adminRouter.delete('/waiters/:id', requireOrgAdmin, requireActiveSubscription, async (c) => {
   const session = await auth.api.getSession({ headers: c.req.raw.headers })
   const orgId = (session as any)?.session?.activeOrganizationId
   if (!orgId) return c.json({ error: 'No active organization.' }, 400)
@@ -1047,6 +1302,52 @@ adminRouter.get('/waiters/:id/orders', requireOrgAdmin, async (c) => {
     ...o,
     items: itemsByOrder[o.id] ?? [],
   })))
+})
+
+// ─── Security ────────────────────────────────
+
+// Change password
+adminRouter.post('/security/change-password', async (c) => {
+  const { currentPassword, newPassword } = await c.req.json()
+
+  if (!currentPassword || !newPassword) {
+    return c.json({ error: 'Current and new password are required.' }, 400)
+  }
+  if (newPassword.length < 8) {
+    return c.json({ error: 'New password must be at least 8 characters.' }, 400)
+  }
+  if (currentPassword === newPassword) {
+    return c.json({ error: 'New password must be different from current password.' }, 400)
+  }
+
+  try {
+    await auth.api.changePassword({
+      body: { currentPassword, newPassword, revokeOtherSessions: false },
+      headers: c.req.raw.headers,
+    })
+    return c.json({ message: 'Password changed successfully.' })
+  } catch (err: any) {
+    return c.json({ error: err.message ?? 'Failed to change password. Check your current password.' }, 400)
+  }
+})
+
+// List active sessions
+adminRouter.get('/security/sessions', async (c) => {
+  const sessions = await auth.api.listSessions({ headers: c.req.raw.headers })
+  return c.json({ sessions: sessions ?? [] })
+})
+
+// Revoke a specific session by token
+adminRouter.delete('/security/sessions/:token', async (c) => {
+  const { token } = c.req.param()
+  await auth.api.revokeSession({ body: { token }, headers: c.req.raw.headers })
+  return c.json({ message: 'Session revoked.' })
+})
+
+// Revoke all other sessions (keep current)
+adminRouter.delete('/security/sessions', async (c) => {
+  await auth.api.revokeOtherSessions({ headers: c.req.raw.headers })
+  return c.json({ message: 'All other sessions revoked.' })
 })
 
 export { adminRouter }

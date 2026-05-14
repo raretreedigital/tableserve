@@ -21,8 +21,6 @@
   }
 
   onMount(() => {
-    const stored = localStorage.getItem('adminOrgId')
-    if (stored) activeOrgId.set(stored)
     load()
   })
 
@@ -162,7 +160,7 @@
           {#each data.dailyRevenue as day}
             {@const h = maxRev > 0 ? (parseFloat(day.revenue ?? '0') / maxRev) * 100 : 0}
             <div
-              class="flex-1 bg-brand-500 dark:bg-brand-600 rounded-t-sm hover:bg-brand-600 transition-colors cursor-default"
+              class="flex-1 bg-blue-500 dark:bg-blue-600 rounded-t-sm hover:bg-blue-400 dark:hover:bg-blue-500 transition-colors cursor-default"
               style="height: {h}%"
               title="{day.date}: {fmt(day.revenue)} ({day.orders} orders)"
             ></div>

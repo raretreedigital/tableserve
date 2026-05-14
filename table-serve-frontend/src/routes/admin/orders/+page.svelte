@@ -28,8 +28,6 @@
   }
 
   onMount(async () => {
-    const stored = localStorage.getItem('adminOrgId')
-    if (stored) activeOrgId.set(stored)
     await load()
   })
 

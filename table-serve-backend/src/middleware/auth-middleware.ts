@@ -1,5 +1,8 @@
 import type { Context, Next } from 'hono'
 import { auth } from '../lib/auth'
+import { db } from '../db'
+import { organizationProfile } from '../db/schema'
+import { eq } from 'drizzle-orm'
 
 // Attach session to context
 export const sessionMiddleware = async (c: Context, next: Next) => {
@@ -36,6 +39,40 @@ export const requireSuperAdmin = async (c: Context, next: Next) => {
   }
   c.set('user', session.user)
   c.set('session', session.session)
+  await next()
+}
+
+// Require active subscription (non-trial, non-suspended)
+// Use AFTER requireOrgAdmin so organizationId is already on context
+export const requireActiveSubscription = async (c: Context, next: Next) => {
+  const currentUser = c.get('user') as any
+  // Superadmins bypass subscription checks
+  if (currentUser?.role === 'superadmin') return next()
+
+  const orgId = c.get('organizationId') as string
+  if (!orgId) return c.json({ error: 'Organization context required.' }, 400)
+
+  const [profile] = await db
+    .select({ status: organizationProfile.status, plan: organizationProfile.subscriptionPlan })
+    .from(organizationProfile)
+    .where(eq(organizationProfile.organizationId, orgId))
+    .limit(1)
+
+  if (!profile) return c.json({ error: 'Organization not found.' }, 404)
+
+  if (profile.status === 'suspended') {
+    return c.json({ error: 'Your account has been suspended. Contact support.', code: 'SUSPENDED' }, 403)
+  }
+
+  if (profile.status !== 'active') {
+    return c.json({
+      error: 'This feature requires an active subscription. Contact support to activate your account.',
+      code: 'SUBSCRIPTION_REQUIRED',
+      status: profile.status,
+      plan: profile.plan,
+    }, 402)
+  }
+
   await next()
 }
 

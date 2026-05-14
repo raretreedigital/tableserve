@@ -143,7 +143,9 @@ export const organizationProfile = pgTable('organization_profile', {
   footerText: text('footer_text'),
   socialLinks: jsonb('social_links'),
   logoUrl: text('logo_url'),
+  supportName: text('support_name'),
   orderEditWindowMinutes: integer('order_edit_window_minutes').notNull().default(5),
+  kdsToken: text('kds_token'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 })
@@ -160,6 +162,8 @@ export const restaurantTable = pgTable('restaurant_table', {
   capacity: integer('capacity').notNull().default(4),
   location: text('location'),
   isActive: boolean('is_active').notNull().default(true),
+  billRequested: boolean('bill_requested').notNull().default(false),
+  sessionStartedAt: timestamp('session_started_at'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 })

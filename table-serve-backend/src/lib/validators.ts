@@ -63,6 +63,7 @@ export const updateOrganizationProfileSchema = z.object({
   welcomeMessage: z.string().max(500).optional(),
   footerText: z.string().max(300).optional(),
   logoUrl: z.string().url().optional().or(z.literal('')),
+  supportName: z.string().max(100).optional(),
   orderEditWindowMinutes: z.number().int().min(0).max(60).optional(),
   socialLinks: z
     .object({

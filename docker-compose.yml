@@ -36,6 +36,7 @@ services:
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3001}
       MASTER_PASSWORD: ${MASTER_PASSWORD}
       TABLE_SESSION_SECRET: ${TABLE_SESSION_SECRET}
+      ZEPTOMAIL_API_KEY: ${ZEPTOMAIL_API_KEY:-}
       PORT: 3000
       LOKI_URL: http://loki:3100
       LOKI_ENABLED: "true"
@@ -69,6 +70,8 @@ services:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3200}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
     ports:
       - "${GRAFANA_PORT:-3200}:3000"
     volumes:

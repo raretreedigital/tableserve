@@ -1,39 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { adminApi, authApi } from '$lib/api'
+  import { adminApi } from '$lib/api'
   import { activeOrgId } from '$lib/stores/org'
   import Card from '$lib/components/ui/Card.svelte'
   import Badge from '$lib/components/ui/Badge.svelte'
 
   let stats = $state<any>(null)
   let loading = $state(true)
-  let orgId = $state('')
+  let orgId = $derived($activeOrgId)
 
   onMount(async () => {
-    // Get org from session
-    const { data: session } = await authApi.getSession()
-    if (!session) return
-
-    // Get members to find the org
-    // We need the active org - stored in session or first membership
-    const sessionOrgId = (session.session as any)?.activeOrganizationId
-    if (sessionOrgId) {
-      orgId = sessionOrgId
-      activeOrgId.set(orgId)
-    } else {
-      // Try to find org from API - the admin always has one
-      // Backend uses session's org context, so we pass the header
-      // For now, use local storage or URL
-      const stored = localStorage.getItem('adminOrgId')
-      if (stored) {
-        orgId = stored
-        activeOrgId.set(orgId)
-      }
-    }
-
-    if (!orgId) { loading = false; return }
-
-    const { data } = await adminApi.getDashboard(orgId)
+    // Wait briefly for the layout to resolve the org ID, then load
+    await new Promise(r => setTimeout(r, 50))
+    if (!$activeOrgId) { loading = false; return }
+    const { data } = await adminApi.getDashboard($activeOrgId)
     if (data) stats = data
     loading = false
   })

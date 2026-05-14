@@ -63,6 +63,58 @@
   let filterVeg = $state(false)
   let searchQuery = $state('')
 
+  // ── My Orders ──
+  interface PlacedOrder {
+    id: string
+    status: string
+    totalAmount: string
+    createdAt: string
+    items: { menuItemName: string; quantity: number; unitPrice: string }[]
+  }
+  let myOrders = $state<PlacedOrder[]>([])
+  let myOrdersOpen = $state(false)
+  let billRequested = $state(false)
+  let requestingBill = $state(false)
+  let pollingInterval: ReturnType<typeof setInterval> | null = null
+
+  async function fetchMyOrders() {
+    if (!token) return
+    const { data } = await customerApi.getTableOrders(token)
+    if (data) {
+      myOrders = (data as any).orders ?? []
+      billRequested = (data as any).billRequested ?? false
+    }
+  }
+
+  async function handleRequestBill() {
+    if (!token || requestingBill) return
+    requestingBill = true
+    const { error } = await customerApi.requestBill(token)
+    requestingBill = false
+    if (!error) {
+      billRequested = true
+    }
+  }
+
+  function statusColor(status: string) {
+    const map: Record<string, string> = {
+      pending: '#f59e0b',
+      confirmed: '#3b82f6',
+      preparing: '#8b5cf6',
+      ready: '#10b981',
+      served: '#6b7280',
+      cancelled: '#ef4444',
+    }
+    return map[status] ?? '#6b7280'
+  }
+
+  function statusLabel(status: string) {
+    return { pending: 'Pending', confirmed: 'Confirmed', preparing: 'Preparing', ready: 'Ready ✓', served: 'Served', cancelled: 'Cancelled' }[status] ?? status
+  }
+
+  let totalSpent = $derived(myOrders.reduce((s, o) => s + parseFloat(o.totalAmount ?? '0'), 0))
+  let activeOrderCount = $derived(myOrders.filter((o) => !['served', 'cancelled'].includes(o.status)).length)
+
   onMount(async () => {
     const tableRes = await customerApi.resolveTable(token ?? '')
     if (tableRes.error || !tableRes.data) {
@@ -81,6 +133,13 @@
       items = (menuRes.data as any).items ?? []
     }
     loading = false
+
+    // Start polling for order status updates every 10s
+    pollingInterval = setInterval(fetchMyOrders, 10_000)
+
+    return () => {
+      if (pollingInterval) clearInterval(pollingInterval)
+    }
   })
 
   let displayedItems = $derived(
@@ -160,6 +219,8 @@
     orderId = (data as any).orderId
     orderSuccess = true
     cart = []
+    // Fetch orders immediately after placing
+    await fetchMyOrders()
   }
 
   function spiceLabel(level: string) {
@@ -207,6 +268,21 @@
 
         <div class="flex items-center gap-2">
           <ThemeToggle />
+          {#if myOrders.length > 0}
+            <button
+              class="relative flex items-center gap-2 h-10 px-3 rounded-lg font-medium text-sm transition-colors border"
+              style="border-color: {org.accentColor}; color: {org.accentColor}"
+              onclick={() => (myOrdersOpen = true)}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+              Orders
+              {#if activeOrderCount > 0}
+                <span class="inline-flex items-center justify-center w-5 h-5 rounded-full text-white text-xs font-bold" style="background-color: {org.accentColor}">{activeOrderCount}</span>
+              {/if}
+            </button>
+          {/if}
           {#if cart.length > 0}
             <button
               class="relative flex items-center gap-2 h-10 px-4 rounded-lg font-medium text-sm transition-colors text-white"
@@ -252,18 +328,23 @@
 
       <div class="flex gap-2 flex-wrap">
         <button
-          class="px-3 py-1.5 rounded-full text-sm font-medium transition-colors border"
-          style={filterChefSpecial ? `background-color: ${org.accentColor}; color: white; border-color: ${org.accentColor}` : 'border-color: #d1d5db'}
+          class="px-3 py-1.5 rounded-full text-sm font-medium transition-all border
+            {filterChefSpecial
+              ? 'text-white border-transparent'
+              : 'bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 border-neutral-300 dark:border-neutral-600 hover:border-neutral-400 dark:hover:border-neutral-500'}"
+          style={filterChefSpecial ? `background-color: ${org.accentColor}; border-color: ${org.accentColor}` : ''}
           onclick={() => (filterChefSpecial = !filterChefSpecial)}
         >
           Chef's Special
         </button>
         <button
-          class="px-3 py-1.5 rounded-full text-sm font-medium transition-colors border"
-          style={filterVeg ? `background-color: #16a34a; color: white; border-color: #16a34a` : 'border-color: #d1d5db'}
+          class="px-3 py-1.5 rounded-full text-sm font-medium transition-all border
+            {filterVeg
+              ? 'text-white border-transparent bg-green-600'
+              : 'bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 border-neutral-300 dark:border-neutral-600 hover:border-neutral-400 dark:hover:border-neutral-500'}"
           onclick={() => (filterVeg = !filterVeg)}
         >
-          Vegetarian/Vegan
+          Vegetarian / Vegan
         </button>
       </div>
     </div>
@@ -273,16 +354,22 @@
       <div class="max-w-4xl mx-auto px-4 pt-4">
         <div class="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
           <button
-            class="px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors border"
-            style={activeCategory === 'all' ? `background-color: ${org.accentColor}; color: white; border-color: ${org.accentColor}` : 'border-color: #d1d5db; background-color: white'}
+            class="px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all border
+              {activeCategory === 'all'
+                ? 'text-white border-transparent'
+                : 'bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 border-neutral-300 dark:border-neutral-600 hover:border-neutral-400 dark:hover:border-neutral-500'}"
+            style={activeCategory === 'all' ? `background-color: ${org.accentColor}; border-color: ${org.accentColor}` : ''}
             onclick={() => (activeCategory = 'all')}
           >
             All
           </button>
           {#each categories as cat}
             <button
-              class="px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors border"
-              style={activeCategory === cat.id ? `background-color: ${org.accentColor}; color: white; border-color: ${org.accentColor}` : 'border-color: #d1d5db; background-color: white'}
+              class="px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all border
+                {activeCategory === cat.id
+                  ? 'text-white border-transparent'
+                  : 'bg-white dark:bg-neutral-800 text-neutral-700 dark:text-neutral-200 border-neutral-300 dark:border-neutral-600 hover:border-neutral-400 dark:hover:border-neutral-500'}"
+              style={activeCategory === cat.id ? `background-color: ${org.accentColor}; border-color: ${org.accentColor}` : ''}
               onclick={() => (activeCategory = cat.id)}
             >
               {cat.name}
@@ -670,4 +757,66 @@
       </form>
     {/if}
   </Modal>
-{/if}
+
+  <!-- My Orders Panel -->
+  <Modal bind:open={myOrdersOpen} title="My Orders" size="md">
+    {#if myOrders.length === 0}
+      <div class="text-center py-8">
+        <p class="text-neutral-500 dark:text-neutral-400">No orders placed yet.</p>
+      </div>
+    {:else}
+      <div class="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+        {#each myOrders as o}
+          <div class="p-4 rounded-xl border border-neutral-200 dark:border-neutral-700">
+            <div class="flex items-start justify-between gap-2 mb-2">
+              <div>
+                <p class="text-xs text-neutral-400">{new Date(o.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                <p class="font-semibold text-neutral-900 dark:text-neutral-100">{fmt(o.totalAmount)}</p>
+              </div>
+              <span
+                class="text-xs font-semibold px-2.5 py-1 rounded-full text-white"
+                style="background-color: {statusColor(o.status)}"
+              >{statusLabel(o.status)}</span>
+            </div>
+            <ul class="space-y-0.5">
+              {#each o.items as item}
+                <li class="text-sm text-neutral-600 dark:text-neutral-400 flex justify-between">
+                  <span>{item.quantity}× {item.menuItemName}</span>
+                  <span>{fmt(parseFloat(item.unitPrice) * item.quantity)}</span>
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/each}
+      </div>
+
+      <!-- Bill summary -->
+      <div class="mt-4 pt-4 border-t border-neutral-200 dark:border-neutral-700">
+        <div class="flex justify-between font-bold text-neutral-900 dark:text-neutral-100 mb-4">
+          <span>Total spent</span>
+          <span>{fmt(totalSpent)}</span>
+        </div>
+
+        {#if billRequested}
+          <div class="flex items-center gap-3 p-3 rounded-xl bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800">
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 text-green-600 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+            </svg>
+            <p class="text-sm text-green-700 dark:text-green-400 font-medium">Bill requested — a waiter will be with you shortly.</p>
+          </div>
+        {:else}
+          <button
+            onclick={handleRequestBill}
+            disabled={requestingBill}
+            class="w-full h-12 rounded-xl font-semibold text-white disabled:opacity-60 flex items-center justify-center gap-2"
+            style="background-color: {org?.accentColor}"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 14H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-4m-4 4l-4-4m4 4l4-4" />
+            </svg>
+            {requestingBill ? 'Requesting...' : 'Request Bill'}
+          </button>
+        {/if}
+      </div>
+    {/if}
+  </Modal>{/if}

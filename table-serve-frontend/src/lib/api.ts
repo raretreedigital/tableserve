@@ -20,18 +20,30 @@ async function request<T>(
   options: RequestInit = {}
 ): Promise<{ data: T | null; error: string | null }> {
   try {
+    // Destructure headers out so they don't override our Content-Type when we spread ...restOptions
+    const { headers: extraHeaders, ...restOptions } = options
     const res = await fetch(`${BASE}${path}`, {
       credentials: 'include',
+      ...restOptions,
       headers: {
         'Content-Type': 'application/json',
-        ...(options.headers ?? {}),
+        ...(extraHeaders as Record<string, string> | undefined ?? {}),
       },
-      ...options,
     })
 
     const json = await res.json().catch(() => ({}))
 
     if (!res.ok) {
+      // Handle Zod validation error objects — extract a human-readable message
+      if (json.error && typeof json.error === 'object') {
+        const issues: Array<{ path: string[]; message: string }> = json.error.issues ?? []
+        if (issues.length > 0) {
+          const first = issues[0]
+          const field = first.path?.join('.') ?? ''
+          return { data: null, error: field ? `${field}: ${first.message}` : first.message }
+        }
+        return { data: null, error: 'Validation failed.' }
+      }
       return { data: null, error: json.error ?? `Request failed with status ${res.status}` }
     }
 
@@ -116,6 +128,16 @@ export const adminApi = {
   register: (data: object) =>
     request('/admin/register', { method: 'POST', body: JSON.stringify(data) }),
 
+  getMyOrg: () =>
+    request<{ organizationId: string }>('/admin/my-org'),
+
+  updateOrgName: (orgId: string, name: string) =>
+    request('/admin/organization-name', {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+      headers: orgHeaders(orgId),
+    }),
+
   getDashboard: (orgId: string) =>
     request('/admin/dashboard', { headers: orgHeaders(orgId) }),
 
@@ -193,8 +215,8 @@ export const adminApi = {
     request(`/admin/tables/${id}`, { method: 'DELETE', headers: orgHeaders(orgId) }),
 
   // Orders
-  getOrders: (orgId: string, status?: string) =>
-    request(`/admin/orders${status ? `?status=${status}` : ''}`, { headers: orgHeaders(orgId) }),
+  getOrders: (orgId: string, status?: string, includeItems = false) =>
+    request(`/admin/orders${status ? `?status=${status}` : ''}${includeItems ? (status ? '&' : '?') + 'include=items' : ''}`, { headers: orgHeaders(orgId) }),
 
   getOrder: (orgId: string, id: string) =>
     request(`/admin/orders/${id}`, { headers: orgHeaders(orgId) }),
@@ -215,6 +237,56 @@ export const adminApi = {
   // Members
   getMembers: (orgId: string) =>
     request('/admin/members', { headers: orgHeaders(orgId) }),
+
+  // Waiters
+  getWaiters: (orgId: string) =>
+    request('/admin/waiters', { headers: orgHeaders(orgId) }),
+
+  getWaiter: (orgId: string, id: string) =>
+    request(`/admin/waiters/${id}`, { headers: orgHeaders(orgId) }),
+
+  createWaiter: (orgId: string, data: object) =>
+    request('/admin/waiters', { method: 'POST', body: JSON.stringify(data), headers: orgHeaders(orgId) }),
+
+  updateWaiter: (orgId: string, id: string, data: object) =>
+    request(`/admin/waiters/${id}`, { method: 'PATCH', body: JSON.stringify(data), headers: orgHeaders(orgId) }),
+
+  deleteWaiter: (orgId: string, id: string) =>
+    request(`/admin/waiters/${id}`, { method: 'DELETE', headers: orgHeaders(orgId) }),
+
+  regenerateCredentials: (orgId: string, id: string) =>
+    request(`/admin/waiters/${id}/regenerate-credentials`, { method: 'POST', headers: orgHeaders(orgId) }),
+
+  // Security
+  changePassword: (orgId: string, data: { currentPassword: string; newPassword: string }) =>
+    request('/admin/security/change-password', { method: 'POST', body: JSON.stringify(data), headers: orgHeaders(orgId) }),
+
+  getSessions: (orgId: string) =>
+    request('/admin/security/sessions', { headers: orgHeaders(orgId) }),
+
+  revokeSession: (orgId: string, token: string) =>
+    request(`/admin/security/sessions/${encodeURIComponent(token)}`, { method: 'DELETE', headers: orgHeaders(orgId) }),
+
+  revokeAllOtherSessions: (orgId: string) =>
+    request('/admin/security/sessions', { method: 'DELETE', headers: orgHeaders(orgId) }),
+
+  // Tables - session management
+  endTableSession: (orgId: string, tableId: string) =>
+    request(`/admin/tables/${tableId}/end-session`, { method: 'POST', headers: orgHeaders(orgId) }),
+
+  // Staff / Members
+  addMember: (orgId: string, data: { name: string; email: string; role: string }) =>
+    request('/admin/members', { method: 'POST', body: JSON.stringify(data), headers: orgHeaders(orgId) }),
+
+  removeMember: (orgId: string, memberId: string) =>
+    request(`/admin/members/${memberId}`, { method: 'DELETE', headers: orgHeaders(orgId) }),
+
+  // KDS Token
+  getKdsToken: (orgId: string) =>
+    request<{ kdsToken: string; kdsUrl: string }>('/admin/kds-token', { headers: orgHeaders(orgId) }),
+
+  regenerateKdsToken: (orgId: string) =>
+    request<{ kdsToken: string; kdsUrl: string }>('/admin/kds-token/regenerate', { method: 'POST', headers: orgHeaders(orgId) }),
 }
 
 // ─── Customer ─────────────────────────────────
@@ -256,4 +328,25 @@ export const customerApi = {
       body: JSON.stringify(data),
       headers: tableSessionHeader(),
     }),
+
+  getTableOrders: (token: string) =>
+    request(`/customer/table/${token}/orders`, {
+      headers: tableSessionHeader(),
+    }),
+
+  requestBill: (token: string) =>
+    request(`/customer/table/${token}/bill-request`, {
+      method: 'POST',
+      headers: tableSessionHeader(),
+    }),
+}
+
+// ─── Public KDS ──────────────────────────────
+
+export const kdsApi = {
+  getOrders: (token: string) =>
+    request<{ orders: any[] }>(`/customer/kds/${token}/orders`),
+
+  advanceOrder: (token: string, orderId: string) =>
+    request<{ status: string }>(`/customer/kds/${token}/orders/${orderId}/advance`, { method: 'PATCH' }),
 }

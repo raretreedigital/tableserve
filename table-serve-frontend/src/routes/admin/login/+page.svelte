@@ -1,7 +1,8 @@
 <script lang="ts">
   import { goto } from '$app/navigation'
-  import { authApi } from '$lib/api'
+  import { authApi, adminApi } from '$lib/api'
   import { authStore } from '$lib/stores/auth'
+  import { activeOrgId } from '$lib/stores/org'
   import { addToast } from '$lib/stores/toast'
   import Input from '$lib/components/ui/Input.svelte'
   import Button from '$lib/components/ui/Button.svelte'
@@ -18,19 +19,26 @@
     loading = true
 
     const { data, error: err } = await authApi.signIn(email, password)
-    loading = false
-
-    if (err) { error = err; return }
+    if (err) { loading = false; error = err; return }
 
     const { data: session } = await authApi.getSession()
-    if (!session?.user) { error = 'Authentication failed.'; return }
+    if (!session?.user) { loading = false; error = 'Authentication failed.'; return }
     if (session.user.role === 'superadmin') {
       authStore.setUser(session.user)
+      loading = false
       goto('/superadmin')
       return
     }
 
+    // Fetch and store the org ID so all pages can send the x-organization-id header
+    const { data: orgData } = await adminApi.getMyOrg()
+    if (orgData?.organizationId) {
+      localStorage.setItem('adminOrgId', orgData.organizationId)
+      activeOrgId.set(orgData.organizationId)
+    }
+
     authStore.setUser(session.user)
+    loading = false
     addToast('success', `Welcome back, ${session.user.name}.`)
     goto('/admin')
   }

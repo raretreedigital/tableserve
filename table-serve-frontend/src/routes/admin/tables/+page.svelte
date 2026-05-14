@@ -22,8 +22,6 @@
   let selectedTable = $state<RestaurantTable | null>(null)
 
   onMount(async () => {
-    const stored = localStorage.getItem('adminOrgId')
-    if (stored) activeOrgId.set(stored)
     await load()
   })
 
@@ -84,6 +82,14 @@
     await load()
   }
 
+  async function endSession(t: RestaurantTable) {
+    if (!confirm(`End session for ${t.name}? This will mark all active orders as served and clear the bill request.`)) return
+    const { error } = await adminApi.endTableSession(orgId, t.id)
+    if (error) { addToast('error', error); return }
+    addToast('success', `Session ended for ${t.name}.`)
+    await load()
+  }
+
   function showNfc(t: RestaurantTable) {
     selectedTable = t
     nfcModalOpen = true
@@ -133,9 +139,19 @@
                 <p class="text-xs text-neutral-500 dark:text-neutral-400">{table.location}</p>
               {/if}
             </div>
-            <Badge variant={table.isActive ? 'success' : 'danger'}>
-              {table.isActive ? 'Active' : 'Inactive'}
-            </Badge>
+            <div class="flex flex-col items-end gap-1">
+              <Badge variant={table.isActive ? 'success' : 'danger'}>
+                {table.isActive ? 'Active' : 'Inactive'}
+              </Badge>
+              {#if (table as any).billRequested}
+                <span class="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                  </svg>
+                  Bill Requested
+                </span>
+              {/if}
+            </div>
           </div>
 
           <p class="text-sm text-neutral-500 dark:text-neutral-400 mb-4">Capacity: {table.capacity}</p>
@@ -151,6 +167,7 @@
             <Button size="sm" variant="ghost" onclick={() => toggleActive(table)}>
               {table.isActive ? 'Deactivate' : 'Activate'}
             </Button>
+            <Button size="sm" variant="secondary" onclick={() => endSession(table)}>End Session</Button>
             <Button size="sm" variant="danger" onclick={() => deleteTable(table.id)}>Delete</Button>
           </div>
         </Card>

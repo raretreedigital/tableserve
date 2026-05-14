@@ -7,6 +7,13 @@
 			"command": "bun run dev",
 			"isBackground": true,
 			"problemMatcher": []
+		},
+		{
+			"label": "Backend: Start",
+			"type": "shell",
+			"command": "bun --hot ./src/index.ts",
+			"isBackground": true,
+			"problemMatcher": []
 		}
 	]
 }

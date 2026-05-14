@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { zValidator } from '@hono/zod-validator'
+import { zv, zvq } from '../lib/zv'
 import { eq, and, desc, gte, lte, sql, sum, count } from 'drizzle-orm'
 import { db } from '../db'
 import {
@@ -15,6 +15,11 @@ import { requireSuperAdmin } from '../middleware/auth-middleware'
 import { auth } from '../lib/auth'
 import { env } from '../lib/env'
 import {
+  sendActivationEmail,
+  sendSuspensionEmail,
+  sendSubscriptionChangeEmail,
+} from '../lib/email'
+import {
   registerSuperAdminSchema,
   createOrganizationSchema,
   suspendOrganizationSchema,
@@ -24,9 +29,21 @@ import {
 
 const superAdminRouter = new Hono()
 
+// ─── Helper: get org owner (member with role 'owner') ────────────────────────
+
+async function getOrgOwner(orgId: string): Promise<{ name: string; email: string } | null> {
+  const rows = await db
+    .select({ name: user.name, email: user.email })
+    .from(member)
+    .innerJoin(user, eq(member.userId, user.id))
+    .where(and(eq(member.organizationId, orgId), eq(member.role, 'owner')))
+    .limit(1)
+  return rows[0] ?? null
+}
+
 // ─── Register superadmin (master password protected) ───
 
-superAdminRouter.post('/register', zValidator('json', registerSuperAdminSchema), async (c) => {
+superAdminRouter.post('/register', zv(registerSuperAdminSchema), async (c) => {
   const { name, email, password, masterPassword } = c.req.valid('json')
 
   if (masterPassword !== env.MASTER_PASSWORD) {
@@ -108,7 +125,7 @@ superAdminRouter.get('/organizations', async (c) => {
 
 superAdminRouter.post(
   '/organizations',
-  zValidator('json', createOrganizationSchema),
+  zv(createOrganizationSchema),
   async (c) => {
     const { name, slug, ownerEmail, ownerName, ownerPassword } = c.req.valid('json')
 
@@ -193,7 +210,7 @@ superAdminRouter.get('/organizations/:id', async (c) => {
 
 superAdminRouter.patch(
   '/organizations/:id/suspend',
-  zValidator('json', suspendOrganizationSchema),
+  zv(suspendOrganizationSchema),
   async (c) => {
     const { id } = c.req.param()
     const { reason } = c.req.valid('json')
@@ -210,6 +227,18 @@ superAdminRouter.patch(
       .update(organizationProfile)
       .set({ status: 'suspended', updatedAt: new Date() })
       .where(eq(organizationProfile.organizationId, id))
+
+    // Send suspension email to owner
+    const [org] = await db.select({ name: organization.name }).from(organization).where(eq(organization.id, id)).limit(1)
+    const owner = await getOrgOwner(id)
+    if (org && owner) {
+      sendSuspensionEmail({
+        adminName: owner.name,
+        adminEmail: owner.email,
+        organizationName: org.name,
+        reason,
+      }).catch(() => {})
+    }
 
     return c.json({ message: 'Organization suspended.', reason })
   }
@@ -231,12 +260,25 @@ superAdminRouter.patch('/organizations/:id/activate', async (c) => {
     .set({ status: 'active', updatedAt: new Date() })
     .where(eq(organizationProfile.organizationId, id))
 
+  // Send activation email to owner
+  const [org] = await db.select({ name: organization.name }).from(organization).where(eq(organization.id, id)).limit(1)
+  const owner = await getOrgOwner(id)
+  if (org && owner) {
+    sendActivationEmail({
+      adminName: owner.name,
+      adminEmail: owner.email,
+      organizationName: org.name,
+      plan: existing[0].subscriptionPlan ?? 'basic',
+      loginUrl: `${env.FRONTEND_URLS[0]}/admin/login`,
+    }).catch(() => {})
+  }
+
   return c.json({ message: 'Organization activated.' })
 })
 
 superAdminRouter.patch(
   '/organizations/:id/subscription',
-  zValidator('json', updateSubscriptionSchema),
+  zv(updateSubscriptionSchema),
   async (c) => {
     const { id } = c.req.param()
     const { plan, expiryDays } = c.req.valid('json')
@@ -249,10 +291,25 @@ superAdminRouter.patch(
       .update(organizationProfile)
       .set({
         subscriptionPlan: plan,
+        status: 'active',
         ...(expiry ? { subscriptionExpiry: expiry } : {}),
         updatedAt: new Date(),
       })
       .where(eq(organizationProfile.organizationId, id))
+
+    // Send subscription change email to owner
+    const [org] = await db.select({ name: organization.name }).from(organization).where(eq(organization.id, id)).limit(1)
+    const owner = await getOrgOwner(id)
+    if (org && owner) {
+      sendSubscriptionChangeEmail({
+        adminName: owner.name,
+        adminEmail: owner.email,
+        organizationName: org.name,
+        plan,
+        expiry: expiry ?? null,
+        loginUrl: `${env.FRONTEND_URLS[0]}/admin/login`,
+      }).catch(() => {})
+    }
 
     return c.json({ message: 'Subscription updated.' })
   }
@@ -268,7 +325,7 @@ superAdminRouter.delete('/organizations/:id', async (c) => {
 
 // ─── Global Analytics ────────────────────────
 
-superAdminRouter.get('/analytics', zValidator('query', analyticsQuerySchema), async (c) => {
+superAdminRouter.get('/analytics', zvq(analyticsQuerySchema), async (c) => {
   const { period } = c.req.valid('query')
 
   const now = new Date()

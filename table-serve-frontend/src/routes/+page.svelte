@@ -4,15 +4,14 @@
   import { onMount } from 'svelte'
 
   onMount(() => {
-    const unsubscribe = authStore.subscribe((state) => {
-      if (!state.initialized) return
+    return authStore.subscribe((state) => {
+      if (state.loading) return
       if (state.user?.role === 'superadmin') {
         goto('/superadmin')
       } else if (state.user) {
         goto('/admin')
       }
     })
-    return unsubscribe
   })
 </script>
 
@@ -40,8 +39,14 @@
         href="/superadmin/login"
         class="inline-flex items-center justify-center h-11 px-6 border border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-300 rounded-lg font-medium hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors"
       >
-        Platform Admin
+        Platform Admin Login
       </a>
     </div>
+    <p class="text-sm text-neutral-400 dark:text-neutral-500 mt-6">
+      First time setup?
+      <a href="/superadmin/register" class="text-brand-600 dark:text-brand-400 font-medium hover:underline">
+        Create Platform Admin
+      </a>
+    </p>
   </div>
 </div>

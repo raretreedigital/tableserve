@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { zValidator } from '@hono/zod-validator'
+import { zv } from '../lib/zv'
 import { eq, and, inArray, ne, desc } from 'drizzle-orm'
 import { db } from '../db'
 import {
@@ -131,7 +131,7 @@ waiterRouter.get('/me', requireWaiter, async (c) => {
 waiterRouter.patch(
   '/me/duty-status',
   requireWaiter,
-  zValidator('json', updateWaiterDutyStatusSchema),
+  zv(updateWaiterDutyStatusSchema),
   async (c) => {
     const assignment = c.get('waiterAssignment') as typeof waiterAssignment.$inferSelect
     const u = c.get('waiterUser') as any
@@ -253,7 +253,7 @@ waiterRouter.get('/orders/:id', requireWaiter, async (c) => {
 waiterRouter.patch(
   '/orders/:id/status',
   requireWaiter,
-  zValidator('json', updateOrderStatusSchema),
+  zv(updateOrderStatusSchema),
   async (c) => {
     const assignment = c.get('waiterAssignment') as typeof waiterAssignment.$inferSelect
     const u = c.get('waiterUser') as any
@@ -289,7 +289,7 @@ waiterRouter.patch(
 waiterRouter.patch(
   '/orders/:id',
   requireWaiter,
-  zValidator('json', editOrderSchema),
+  zv(editOrderSchema),
   async (c) => {
     const assignment = c.get('waiterAssignment') as typeof waiterAssignment.$inferSelect
     const u = c.get('waiterUser') as any

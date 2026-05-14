@@ -13,6 +13,18 @@ export default defineConfig({
 			'/api': {
 				target: API_TARGET,
 				changeOrigin: true,
+				// Prevent the proxy from timing out on slow DB/auth responses
+				proxyTimeout: 30_000,
+				timeout: 30_000,
+				configure(proxy) {
+					proxy.on('error', (err, _req, res) => {
+						console.error('[proxy error]', err.message)
+						if ('headersSent' in res && !res.headersSent) {
+							(res as any).writeHead(502, { 'Content-Type': 'application/json' })
+						}
+						res.end(JSON.stringify({ error: 'Backend unavailable. Please try again.' }))
+					})
+				},
 			},
 		},
 	},

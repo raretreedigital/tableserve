@@ -59,7 +59,7 @@
         <span class="text-white font-bold">TS</span>
       </div>
       <h1 class="text-2xl font-bold text-neutral-900 dark:text-neutral-100">Super Admin</h1>
-      <p class="text-sm text-neutral-500 dark:text-neutral-400 mt-1">Sign in to the platform dashboard</p>
+      <p class="text-sm text-neutral-500 dark:text-neutral-400 mt-1">This login is for super admins only</p>
     </div>
 
     <div class="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-700 p-6 shadow-sm">

@@ -10,7 +10,7 @@ interface AuthState {
 function createAuthStore() {
   const { subscribe, set, update } = writable<AuthState>({
     user: null,
-    loading: true,
+    loading: true,   // start as loading so guards wait for the session fetch
     initialized: false,
   })
 

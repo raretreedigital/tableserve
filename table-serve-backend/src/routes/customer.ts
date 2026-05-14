@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
-import { zValidator } from '@hono/zod-validator'
+import { zv } from '../lib/zv'
 import { sign, verify } from 'hono/jwt'
-import { eq, and, asc, gte, inArray } from 'drizzle-orm'
+import { eq, and, asc, gte, inArray, not, desc } from 'drizzle-orm'
 import { db } from '../db'
 import {
   organization,
@@ -29,16 +29,19 @@ interface TableSessionPayload {
   tableId: string
   tableToken: string
   orgId: string
+  iat: number
   exp: number
   [key: string]: unknown
 }
 
 async function signTableSession(tableId: string, tableToken: string, orgId: string): Promise<string> {
+  const now = Math.floor(Date.now() / 1000)
   const payload: TableSessionPayload = {
     tableId,
     tableToken,
     orgId,
-    exp: Math.floor(Date.now() / 1000) + TABLE_SESSION_TTL,
+    iat: now,
+    exp: now + TABLE_SESSION_TTL,
   }
   return sign(payload, env.TABLE_SESSION_SECRET)
 }
@@ -157,6 +160,14 @@ customerRouter.get('/table/:token', async (c) => {
     return c.json({ error: 'This restaurant is not currently available.' }, 403)
   }
 
+  // Record when this session started — used to filter orders on the My Orders panel
+  // so customers never see orders from a previous session at the same table.
+  const sessionStartedAt = new Date()
+  await db
+    .update(restaurantTable)
+    .set({ sessionStartedAt, updatedAt: sessionStartedAt })
+    .where(eq(restaurantTable.id, table[0].id))
+
   // Issue a short-lived table session JWT (90 min) — proves this request originated
   // from an NFC scan of this specific table. Required for menu browsing and ordering.
   const sessionToken = await signTableSession(
@@ -218,7 +229,7 @@ customerRouter.get('/menu/:organizationId', async (c) => {
 
 // ─── Place order ─────────────────────────────
 
-customerRouter.post('/orders', zValidator('json', createOrderSchema), async (c) => {
+customerRouter.post('/orders', zv(createOrderSchema), async (c) => {
   const { tableToken, customerName, customerPhone, notes, items } = c.req.valid('json')
 
   // ── Rate limiting: max 5 order attempts per table per 60 seconds ──
@@ -420,7 +431,7 @@ customerRouter.get('/orders/:id', async (c) => {
 
 // ─── Edit order (within edit window) ────────
 
-customerRouter.patch('/orders/:id', zValidator('json', editOrderSchema), async (c) => {
+customerRouter.patch('/orders/:id', zv(editOrderSchema), async (c) => {
   const { id } = c.req.param()
   const { items, notes } = c.req.valid('json')
 
@@ -509,6 +520,167 @@ customerRouter.patch('/orders/:id', zValidator('json', editOrderSchema), async (
     .where(eq(order.id, id))
 
   return c.json({ message: 'Order updated.', orderId: id, totalAmount: totalAmount.toFixed(2) })
+})
+
+// ─── Get all orders for current table session ────────────────────────────────
+
+customerRouter.get('/table/:token/orders', async (c) => {
+  const { token } = c.req.param()
+
+  const rawSession = c.req.header('x-table-session')
+  if (!rawSession) return c.json({ error: 'No table session. Please scan the NFC tag.' }, 401)
+  const session = await verifyTableSession(rawSession)
+  if (!session || session.tableToken !== token) return c.json({ error: 'Invalid or expired session.' }, 401)
+
+  // Use the DB-stored sessionStartedAt — this gets cleared on end-session,
+  // so after an admin ends the session the customer sees an empty order list
+  // immediately (JWT iat alone can't handle this since it's stateless).
+  const [tableRow] = await db
+    .select({ sessionStartedAt: restaurantTable.sessionStartedAt, billRequested: restaurantTable.billRequested })
+    .from(restaurantTable)
+    .where(eq(restaurantTable.id, session.tableId))
+    .limit(1)
+
+  if (!tableRow?.sessionStartedAt) {
+    return c.json({ orders: [], billRequested: false })
+  }
+
+  const orders = await db
+    .select()
+    .from(order)
+    .where(and(
+      eq(order.tableId, session.tableId),
+      gte(order.createdAt, tableRow.sessionStartedAt),
+      not(inArray(order.status, ['cancelled'] as any[]))
+    ))
+    .orderBy(desc(order.createdAt))
+
+  const orderIds = orders.map((o) => o.id)
+  const items = orderIds.length
+    ? await db.select().from(orderItem).where(inArray(orderItem.orderId, orderIds))
+    : []
+
+  const itemsByOrder = items.reduce<Record<string, typeof items>>((acc, item) => {
+    ;(acc[item.orderId] ??= []).push(item)
+    return acc
+  }, {})
+
+  return c.json({
+    orders: orders.map((o) => ({ ...o, items: itemsByOrder[o.id] ?? [] })),
+    billRequested: tableRow.billRequested ?? false,
+  })
+})
+
+// ─── Request bill ────────────────────────────────────────────────────────────
+
+customerRouter.post('/table/:token/bill-request', async (c) => {
+  const { token } = c.req.param()
+
+  const rawSession = c.req.header('x-table-session')
+  if (!rawSession) return c.json({ error: 'No table session.' }, 401)
+  const session = await verifyTableSession(rawSession)
+  if (!session || session.tableToken !== token) return c.json({ error: 'Invalid or expired session.' }, 401)
+
+  await db
+    .update(restaurantTable)
+    .set({ billRequested: true, updatedAt: new Date() })
+    .where(eq(restaurantTable.id, session.tableId))
+
+  return c.json({ message: 'Bill requested. A waiter will be with you shortly.' })
+})
+
+// ─── Public KDS endpoint (no auth — token-based) ─────────────────────────────
+
+customerRouter.get('/kds/:token/orders', async (c) => {
+  const { token } = c.req.param()
+
+  const [profile] = await db
+    .select({ organizationId: organizationProfile.organizationId })
+    .from(organizationProfile)
+    .where(eq(organizationProfile.kdsToken, token))
+    .limit(1)
+
+  if (!profile) return c.json({ error: 'Invalid KDS token.' }, 401)
+
+  const KITCHEN_STATUSES = ['pending', 'confirmed', 'preparing', 'ready']
+
+  const activeOrders = await db
+    .select({
+      id: order.id,
+      tableId: order.tableId,
+      status: order.status,
+      notes: order.notes,
+      totalAmount: order.totalAmount,
+      createdAt: order.createdAt,
+    })
+    .from(order)
+    .where(and(
+      eq(order.organizationId, profile.organizationId),
+      inArray(order.status, KITCHEN_STATUSES as any[])
+    ))
+    .orderBy(asc(order.createdAt))
+
+  if (!activeOrders.length) return c.json({ orders: [] })
+
+  const orderIds = activeOrders.map((o) => o.id)
+  const items = await db.select().from(orderItem).where(inArray(orderItem.orderId, orderIds))
+
+  const tableIds = [...new Set(activeOrders.map((o) => o.tableId).filter(Boolean) as string[])]
+  const tables = tableIds.length
+    ? await db
+        .select({ id: restaurantTable.id, name: restaurantTable.name })
+        .from(restaurantTable)
+        .where(inArray(restaurantTable.id, tableIds))
+    : []
+  const tableNameMap = Object.fromEntries(tables.map((t) => [t.id, t.name]))
+
+  const itemsByOrder = items.reduce<Record<string, typeof items>>((acc, item) => {
+    ;(acc[item.orderId] ??= []).push(item)
+    return acc
+  }, {})
+
+  return c.json({
+    orders: activeOrders.map((o) => ({
+      ...o,
+      tableName: o.tableId ? (tableNameMap[o.tableId] ?? null) : null,
+      items: itemsByOrder[o.id] ?? [],
+    })),
+  })
+})
+
+// KDS advance order status
+const KDS_STATUS_NEXT: Record<string, string> = {
+  pending: 'confirmed',
+  confirmed: 'preparing',
+  preparing: 'ready',
+  ready: 'served',
+}
+
+customerRouter.patch('/kds/:token/orders/:orderId/advance', async (c) => {
+  const { token, orderId } = c.req.param()
+
+  const [profile] = await db
+    .select({ organizationId: organizationProfile.organizationId })
+    .from(organizationProfile)
+    .where(eq(organizationProfile.kdsToken, token))
+    .limit(1)
+
+  if (!profile) return c.json({ error: 'Invalid KDS token.' }, 401)
+
+  const [existingOrder] = await db
+    .select({ status: order.status, organizationId: order.organizationId })
+    .from(order)
+    .where(and(eq(order.id, orderId), eq(order.organizationId, profile.organizationId)))
+    .limit(1)
+
+  if (!existingOrder) return c.json({ error: 'Order not found.' }, 404)
+
+  const next = KDS_STATUS_NEXT[existingOrder.status]
+  if (!next) return c.json({ error: 'Cannot advance this order further.' }, 400)
+
+  await db.update(order).set({ status: next as any, updatedAt: new Date() }).where(eq(order.id, orderId))
+
+  return c.json({ status: next })
 })
 
 export { customerRouter }

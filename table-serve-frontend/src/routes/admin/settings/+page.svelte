@@ -10,10 +10,12 @@
   import Textarea from '$lib/components/ui/Textarea.svelte'
   import Badge from '$lib/components/ui/Badge.svelte'
   import type { OrganizationProfile } from '$lib/types'
+  import KdsTokenCard from '$lib/components/KdsTokenCard.svelte'
 
   let orgId = $derived($activeOrgId)
   let profile = $state<OrganizationProfile | null>(null)
   let orgName = $state('')
+  let orgNameSaving = $state(false)
   let loading = $state(true)
   let saving = $state(false)
 
@@ -32,6 +34,7 @@
     email: '',
     website: '',
     description: '',
+    supportName: '',
     primaryColor: '#1a1a1a',
     secondaryColor: '#f5f5f5',
     accentColor: '#e85d04',
@@ -56,8 +59,6 @@
   })
 
   onMount(async () => {
-    const stored = localStorage.getItem('adminOrgId')
-    if (stored) activeOrgId.set(stored)
     await load()
   })
 
@@ -75,8 +76,7 @@
           phone: p.phone ?? '',
           email: p.email ?? '',
           website: p.website ?? '',
-          description: p.description ?? '',
-          primaryColor: p.primaryColor,
+          description: p.description ?? '',          supportName: (p as any).supportName ?? '',          primaryColor: p.primaryColor,
           secondaryColor: p.secondaryColor,
           accentColor: p.accentColor,
           fontFamily: p.fontFamily,
@@ -94,13 +94,22 @@
           welcomeMessage: p.welcomeMessage ?? '',
           footerText: p.footerText ?? '',
           orderEditWindowMinutes: String((p as any).orderEditWindowMinutes ?? 5),
-          instagramUrl: (p.socialLinks as any)?.instagram ?? '',,
+          instagramUrl: (p.socialLinks as any)?.instagram ?? '',
           facebookUrl: (p.socialLinks as any)?.facebook ?? '',
           twitterUrl: (p.socialLinks as any)?.twitter ?? '',
         }
       }
     }
     loading = false
+  }
+
+  async function handleSaveOrgName() {
+    if (!orgName.trim()) return
+    orgNameSaving = true
+    const { error } = await adminApi.updateOrgName(orgId, orgName)
+    orgNameSaving = false
+    if (error) { addToast('error', error); return }
+    addToast('success', 'Restaurant name updated.')
   }
 
   async function handleSave(e: SubmitEvent) {
@@ -113,6 +122,7 @@
       email: form.email || undefined,
       website: form.website || undefined,
       description: form.description || undefined,
+      supportName: form.supportName || undefined,
       primaryColor: form.primaryColor,
       secondaryColor: form.secondaryColor,
       accentColor: form.accentColor,
@@ -212,14 +222,45 @@
         </Card>
       {/if}
 
+      <!-- Kitchen Display System -->
+      <KdsTokenCard {orgId} />
+
       <!-- Restaurant Info -->
       <Card>
         <h2 class="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">Restaurant Information</h2>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Input label="Restaurant Name" value={orgName} disabled hint="Contact support to change." />
+          <div class="flex flex-col gap-1 sm:col-span-2">
+            <label class="text-sm font-medium text-neutral-700 dark:text-neutral-300">Restaurant Name</label>
+            <div class="flex gap-2">
+              <input
+                type="text"
+                bind:value={orgName}
+                class="flex-1 h-10 px-3 rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-900 text-sm text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-brand-500"
+                placeholder="Your restaurant name"
+              />
+              <button
+                type="button"
+                onclick={handleSaveOrgName}
+                disabled={orgNameSaving}
+                class="px-4 h-10 rounded-lg bg-brand-600 text-white text-sm font-medium hover:bg-brand-700 disabled:opacity-50"
+              >{orgNameSaving ? 'Saving…' : 'Update Name'}</button>
+            </div>
+          </div>
+          <Input label="Support Name" bind:value={form.supportName} placeholder="e.g. Pizza Palace Team" hint="Shown to customers for support & contact purposes." />
           <Input label="Contact Email" type="email" bind:value={form.email} />
           <Input label="Phone" type="tel" bind:value={form.phone} />
           <Input label="Website" type="url" bind:value={form.website} />
+          <div class="flex flex-col gap-1">
+            <label class="text-sm font-medium text-neutral-700 dark:text-neutral-300">Company Logo</label>
+            <div class="flex items-center gap-3">
+              {#if form.logoUrl}
+                <img src={form.logoUrl} alt="Logo preview" class="w-12 h-12 rounded-lg object-contain border border-neutral-200 dark:border-neutral-700 bg-white p-1" />
+              {:else}
+                <div class="w-12 h-12 rounded-lg border border-dashed border-neutral-300 dark:border-neutral-600 flex items-center justify-center text-neutral-400 text-xs">Logo</div>
+              {/if}
+              <Input bind:value={form.logoUrl} placeholder="https://..." class="flex-1" hint="URL to your restaurant logo" />
+            </div>
+          </div>
           <Textarea label="Address" bind:value={form.address} rows={2} class="sm:col-span-2" />
           <Textarea label="Description" bind:value={form.description} rows={3} class="sm:col-span-2" />
         </div>
@@ -255,7 +296,6 @@
             options={[{ value: 'grid', label: 'Grid' }, { value: 'list', label: 'List' }]}
           />
           <Input label="Banner Image URL" bind:value={form.bannerUrl} placeholder="https://..." class="sm:col-span-2" />
-          <Input label="Logo URL" bind:value={form.logoUrl} placeholder="https://..." class="sm:col-span-2" />
         </div>
       </Card>
 
