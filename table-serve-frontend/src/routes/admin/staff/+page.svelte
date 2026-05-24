@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { adminApi } from '$lib/api'
+  import { fmtDate } from '$lib/date'
   import { activeOrgId } from '$lib/stores/org'
   import { addToast } from '$lib/stores/toast'
+  import { showConfirm } from '$lib/stores/confirm.svelte'
   import Card from '$lib/components/ui/Card.svelte'
   import Button from '$lib/components/ui/Button.svelte'
   import Badge from '$lib/components/ui/Badge.svelte'
@@ -74,7 +76,7 @@
   }
 
   async function handleRemove(m: Member) {
-    if (!confirm(`Remove ${m.name} from your organization?`)) return
+    if (!await showConfirm({ title: 'Remove member', message: `${m.name} will lose access to this organization.`, confirmLabel: 'Remove', variant: 'danger' })) return
     const { error } = await adminApi.removeMember(orgId, m.id)
     if (error) { addToast('error', error); return }
     addToast('success', 'Member removed.')
@@ -142,7 +144,7 @@
               </div>
               <p class="text-sm text-neutral-500 dark:text-neutral-400">{m.email}</p>
               <p class="text-xs text-neutral-400 dark:text-neutral-500 mt-0.5">
-                Added {new Date(m.createdAt).toLocaleDateString()}
+                Added {fmtDate(m.createdAt)}
               </p>
             </div>
 

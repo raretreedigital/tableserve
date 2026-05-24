@@ -2,6 +2,7 @@
   import { page } from '$app/stores'
   import { onMount } from 'svelte'
   import { superAdminApi } from '$lib/api'
+  import { fmtDate } from '$lib/date'
   import { addToast } from '$lib/stores/toast'
   import Card from '$lib/components/ui/Card.svelte'
   import Badge from '$lib/components/ui/Badge.svelte'
@@ -103,7 +104,7 @@
           {/if}
           <div class="flex justify-between">
             <dt class="text-neutral-500 dark:text-neutral-400">Created</dt>
-            <dd class="font-medium text-neutral-900 dark:text-neutral-100">{new Date(org?.createdAt).toLocaleDateString()}</dd>
+            <dd class="font-medium text-neutral-900 dark:text-neutral-100">{fmtDate(org?.createdAt)}</dd>
           </div>
         </dl>
 

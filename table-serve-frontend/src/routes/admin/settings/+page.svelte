@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { adminApi } from '$lib/api'
+  import { fmtDate } from '$lib/date'
   import { activeOrgId } from '$lib/stores/org'
   import { addToast } from '$lib/stores/toast'
   import Card from '$lib/components/ui/Card.svelte'
@@ -11,6 +12,7 @@
   import Badge from '$lib/components/ui/Badge.svelte'
   import type { OrganizationProfile } from '$lib/types'
   import KdsTokenCard from '$lib/components/KdsTokenCard.svelte'
+  import ImageCropper from '$lib/components/ImageCropper.svelte'
 
   let orgId = $derived($activeOrgId)
   let profile = $state<OrganizationProfile | null>(null)
@@ -56,6 +58,14 @@
     instagramUrl: '',
     facebookUrl: '',
     twitterUrl: '',
+    receiptHeaderNote: '',
+    receiptFooterNote: '',
+    receiptThankYouMessage: '',
+    receiptShowTax: true,
+    receiptShowServiceCharge: true,
+    receiptShowOrderId: true,
+    receiptShowLogo: true,
+    receiptShowItemizedList: true,
   })
 
   onMount(async () => {
@@ -97,6 +107,14 @@
           instagramUrl: (p.socialLinks as any)?.instagram ?? '',
           facebookUrl: (p.socialLinks as any)?.facebook ?? '',
           twitterUrl: (p.socialLinks as any)?.twitter ?? '',
+          receiptHeaderNote: (p as any).receiptSettings?.headerNote ?? '',
+          receiptFooterNote: (p as any).receiptSettings?.footerNote ?? '',
+          receiptThankYouMessage: (p as any).receiptSettings?.thankYouMessage ?? '',
+          receiptShowTax: (p as any).receiptSettings?.showTax ?? true,
+          receiptShowServiceCharge: (p as any).receiptSettings?.showServiceCharge ?? true,
+          receiptShowOrderId: (p as any).receiptSettings?.showOrderId ?? true,
+          receiptShowLogo: (p as any).receiptSettings?.showLogo ?? true,
+          receiptShowItemizedList: (p as any).receiptSettings?.showItemizedList ?? true,
         }
       }
     }
@@ -145,6 +163,16 @@
         instagram: form.instagramUrl || undefined,
         facebook: form.facebookUrl || undefined,
         twitter: form.twitterUrl || undefined,
+      },
+      receiptSettings: {
+        headerNote: form.receiptHeaderNote || undefined,
+        footerNote: form.receiptFooterNote || undefined,
+        thankYouMessage: form.receiptThankYouMessage || undefined,
+        showTax: form.receiptShowTax,
+        showServiceCharge: form.receiptShowServiceCharge,
+        showOrderId: form.receiptShowOrderId,
+        showLogo: form.receiptShowLogo,
+        showItemizedList: form.receiptShowItemizedList,
       },
     }
 
@@ -212,7 +240,7 @@
             {/each}
           </div>
           {#if profile.subscriptionExpiry}
-            <p class="text-xs text-neutral-500 mt-3">Expires: {new Date(profile.subscriptionExpiry).toLocaleDateString()}</p>
+            <p class="text-xs text-neutral-500 mt-3">Expires: {fmtDate(profile.subscriptionExpiry)}</p>
           {/if}
           {#if !isPaid}
             <div class="mt-4 p-3 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 text-sm text-amber-700 dark:text-amber-400">
@@ -250,16 +278,14 @@
           <Input label="Contact Email" type="email" bind:value={form.email} />
           <Input label="Phone" type="tel" bind:value={form.phone} />
           <Input label="Website" type="url" bind:value={form.website} />
-          <div class="flex flex-col gap-1">
-            <label class="text-sm font-medium text-neutral-700 dark:text-neutral-300">Company Logo</label>
-            <div class="flex items-center gap-3">
-              {#if form.logoUrl}
-                <img src={form.logoUrl} alt="Logo preview" class="w-12 h-12 rounded-lg object-contain border border-neutral-200 dark:border-neutral-700 bg-white p-1" />
-              {:else}
-                <div class="w-12 h-12 rounded-lg border border-dashed border-neutral-300 dark:border-neutral-600 flex items-center justify-center text-neutral-400 text-xs">Logo</div>
-              {/if}
-              <Input bind:value={form.logoUrl} placeholder="https://..." class="flex-1" hint="URL to your restaurant logo" />
-            </div>
+          <div class="sm:col-span-2">
+            <ImageCropper
+              bind:value={form.logoUrl}
+              aspect={1}
+              label="Company Logo"
+              hint="Square image recommended. Click to upload and crop."
+              placeholder="Upload logo"
+            />
           </div>
           <Textarea label="Address" bind:value={form.address} rows={2} class="sm:col-span-2" />
           <Textarea label="Description" bind:value={form.description} rows={3} class="sm:col-span-2" />
@@ -295,7 +321,15 @@
             bind:value={form.menuLayout}
             options={[{ value: 'grid', label: 'Grid' }, { value: 'list', label: 'List' }]}
           />
-          <Input label="Banner Image URL" bind:value={form.bannerUrl} placeholder="https://..." class="sm:col-span-2" />
+          <div class="sm:col-span-2">
+            <ImageCropper
+              bind:value={form.bannerUrl}
+              aspect={16/9}
+              label="Banner Image"
+              hint="16:9 landscape image. Displayed at the top of your customer menu page."
+              placeholder="Upload banner"
+            />
+          </div>
         </div>
       </Card>
 
@@ -367,9 +401,102 @@
         </div>
       </Card>
 
+      <!-- Receipt Customization -->
+      <Card>
+        <div class="flex items-start justify-between mb-1">
+          <div>
+            <h2 class="font-semibold text-neutral-900 dark:text-neutral-100">Receipt Customization</h2>
+            <p class="text-sm text-neutral-500 dark:text-neutral-400 mt-0.5">Control what appears on the digital receipt shown to customers when they request the bill.</p>
+          </div>
+        </div>
+
+        <!-- Live preview strip -->
+        <div class="mt-5 p-4 rounded-xl border border-dashed border-neutral-300 dark:border-neutral-600 bg-neutral-50 dark:bg-neutral-800/50 text-xs font-mono space-y-1.5">
+          <p class="text-center text-[10px] font-sans font-semibold text-neutral-400 uppercase tracking-widest mb-2">Receipt Preview</p>
+          {#if form.receiptShowLogo && form.logoUrl}
+            <div class="flex justify-center mb-2">
+              <img src={form.logoUrl} alt="logo" class="h-8 w-8 rounded object-cover" />
+            </div>
+          {/if}
+          <p class="text-center font-bold text-neutral-900 dark:text-neutral-100">{orgName || 'Your Restaurant'}</p>
+          {#if form.receiptHeaderNote}
+            <p class="text-center text-neutral-500 dark:text-neutral-400 whitespace-pre-wrap">{form.receiptHeaderNote}</p>
+          {/if}
+          <div class="border-t border-dashed border-neutral-300 dark:border-neutral-600 my-1.5"></div>
+          {#if form.receiptShowItemizedList}
+            <div class="flex justify-between text-neutral-700 dark:text-neutral-300"><span>1× Example Item</span><span>{form.currencySymbol}12.00</span></div>
+            <div class="flex justify-between text-neutral-700 dark:text-neutral-300"><span>2× Another Item</span><span>{form.currencySymbol}18.00</span></div>
+          {/if}
+          <div class="border-t border-dashed border-neutral-300 dark:border-neutral-600 my-1.5"></div>
+          <div class="flex justify-between text-neutral-600 dark:text-neutral-400"><span>Subtotal</span><span>{form.currencySymbol}30.00</span></div>
+          {#if form.receiptShowTax && parseFloat(form.taxRate) > 0}
+            <div class="flex justify-between text-neutral-600 dark:text-neutral-400"><span>Tax ({form.taxRate}%)</span><span>{form.currencySymbol}{(30 * parseFloat(form.taxRate) / 100).toFixed(2)}</span></div>
+          {/if}
+          {#if form.receiptShowServiceCharge && parseFloat(form.serviceChargeRate) > 0}
+            <div class="flex justify-between text-neutral-600 dark:text-neutral-400"><span>Service Charge ({form.serviceChargeRate}%)</span><span>{form.currencySymbol}{(30 * parseFloat(form.serviceChargeRate) / 100).toFixed(2)}</span></div>
+          {/if}
+          <div class="flex justify-between font-bold text-neutral-900 dark:text-neutral-100 pt-0.5"><span>Total</span><span>{form.currencySymbol}30.00</span></div>
+          {#if form.receiptShowOrderId}
+            <p class="text-neutral-400 mt-1">Order #ORD-EXAMPLE</p>
+          {/if}
+          <div class="border-t border-dashed border-neutral-300 dark:border-neutral-600 my-1.5"></div>
+          {#if form.receiptThankYouMessage}
+            <p class="text-center font-medium text-neutral-700 dark:text-neutral-300">{form.receiptThankYouMessage}</p>
+          {/if}
+          {#if form.receiptFooterNote}
+            <p class="text-center text-neutral-400 whitespace-pre-wrap">{form.receiptFooterNote}</p>
+          {/if}
+        </div>
+
+        <!-- Controls -->
+        <div class="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Textarea
+            label="Header Note"
+            bind:value={form.receiptHeaderNote}
+            rows={2}
+            placeholder="e.g. GST Reg No: 12345678&#10;All prices inclusive of tax"
+          />
+          <Textarea
+            label="Footer Note"
+            bind:value={form.receiptFooterNote}
+            rows={2}
+            placeholder="e.g. No exchange or refund policy&#10;Thank you for your visit"
+          />
+          <Input
+            label="Thank You Message"
+            bind:value={form.receiptThankYouMessage}
+            placeholder="e.g. Thank you for dining with us! 🙏"
+          />
+        </div>
+
+        <div class="mt-5 border-t border-neutral-100 dark:border-neutral-800 pt-4">
+          <p class="text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-3">Show on Receipt</p>
+          <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {#each [
+              ['receiptShowLogo', 'Restaurant Logo'],
+              ['receiptShowItemizedList', 'Itemized List'],
+              ['receiptShowTax', 'Tax Breakdown'],
+              ['receiptShowServiceCharge', 'Service Charge'],
+              ['receiptShowOrderId', 'Order ID'],
+            ] as [key, label]}
+              <label class="flex items-center gap-2.5 text-sm text-neutral-700 dark:text-neutral-300 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={(form as any)[key]}
+                  onchange={(e) => { (form as any)[key] = (e.target as HTMLInputElement).checked }}
+                  class="accent-brand-600 w-4 h-4 shrink-0"
+                />
+                {label}
+              </label>
+            {/each}
+          </div>
+        </div>
+      </Card>
+
       <div class="flex justify-end">
         <Button type="submit" loading={saving} size="lg">Save Settings</Button>
       </div>
     </form>
   {/if}
 </div>
+

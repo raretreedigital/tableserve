@@ -1,14 +1,39 @@
 const BASE = '/api'
 
-// ─── Table Session (in-memory only) ──────────
-// Stored in a module-level variable so it is never written to localStorage,
-// disk, or any persistent store. It is lost on page close/refresh, which is
-// intentional — the customer must scan the NFC tag again to start a new session.
+// ─── Table Session ───────────────────────────
+// The session token is saved to sessionStorage so it survives page refreshes
+// within the same browser tab. sessionStorage is cleared when the tab is closed,
+// so the customer still has to scan the NFC tag again in a new tab/session.
+
+const _TS_KEY = 'table-session-token'
+const _TT_KEY = 'table-session-table-token'
 
 let _tableSession: string | null = null
 
-export function setTableSession(token: string) {
-  _tableSession = token
+export function setTableSession(sessionToken: string, tableToken?: string) {
+  _tableSession = sessionToken
+  try {
+    sessionStorage.setItem(_TS_KEY, sessionToken)
+    if (tableToken) sessionStorage.setItem(_TT_KEY, tableToken)
+  } catch {}
+}
+
+/** Restore session from sessionStorage on page refresh. Returns the saved table token (URL param) if found. */
+export function hydrateTableSession(expectedTableToken: string): boolean {
+  try {
+    const savedSession = sessionStorage.getItem(_TS_KEY)
+    const savedTable   = sessionStorage.getItem(_TT_KEY)
+    if (savedSession && savedTable === expectedTableToken) {
+      _tableSession = savedSession
+      return true
+    }
+  } catch {}
+  return false
+}
+
+export function clearTableSession() {
+  _tableSession = null
+  try { sessionStorage.removeItem(_TS_KEY); sessionStorage.removeItem(_TT_KEY) } catch {}
 }
 
 function tableSessionHeader(): HeadersInit {
@@ -234,6 +259,11 @@ export const adminApi = {
       headers: orgHeaders(orgId),
     }),
 
+  getReports: (orgId: string, period?: string) =>
+    request<any>(`/admin/reports${period ? `?period=${period}` : ''}`, {
+      headers: orgHeaders(orgId),
+    }),
+
   // Members
   getMembers: (orgId: string) =>
     request('/admin/members', { headers: orgHeaders(orgId) }),
@@ -287,19 +317,59 @@ export const adminApi = {
 
   regenerateKdsToken: (orgId: string) =>
     request<{ kdsToken: string; kdsUrl: string }>('/admin/kds-token/regenerate', { method: 'POST', headers: orgHeaders(orgId) }),
+
+  // Table session security settings
+  getTableSessionSettings: (orgId: string) =>
+    request<{ collectCustomerDetails: boolean; requireOrderingOtp: boolean; requireSessionApproval: boolean }>(
+      '/admin/table-session-settings', { headers: orgHeaders(orgId) }
+    ),
+
+  updateTableSessionSettings: (orgId: string, data: Partial<{ collectCustomerDetails: boolean; requireOrderingOtp: boolean; requireSessionApproval: boolean }>) =>
+    request('/admin/table-session-settings', { method: 'PATCH', body: JSON.stringify(data), headers: orgHeaders(orgId) }),
+
+  // Table OTP & session approval
+  generateTableOtp: (orgId: string, tableId: string) =>
+    request<{ otp: string; expiresAt: string }>(`/admin/tables/${tableId}/generate-otp`, { method: 'POST', headers: orgHeaders(orgId) }),
+
+  approveTableSession: (orgId: string, tableId: string) =>
+    request(`/admin/tables/${tableId}/approve-session`, { method: 'POST', headers: orgHeaders(orgId) }),
+
+  // Table orders (for print bill)
+  getTableOrders: (orgId: string, tableId: string) =>
+    request<{ orders: any[]; items: any[] }>(`/admin/tables/${tableId}/orders`, { headers: orgHeaders(orgId) }),
+
+  // Export
+  exportOrders: (orgId: string, period = 'month') =>
+    fetch(`/api/admin/export/orders?period=${period}`, { credentials: 'include', headers: orgHeaders(orgId) }),
 }
 
 // ─── Customer ─────────────────────────────────
 
 export const customerApi = {
   resolveTable: async (token: string) => {
-    const result = await request<{ table: any; organization: any; sessionToken: string }>(
+    const result = await request<{ table: any; organization: any; settings: any }>(
       `/customer/table/${token}`
     )
-    // Store the session token in memory immediately after a successful scan.
-    // All subsequent menu and order calls will carry this token automatically.
+    return result
+  },
+
+  startSession: async (token: string, data: { name?: string; partySize?: number; otp?: string }) => {
+    const result = await request<{ sessionToken?: string; pendingApproval?: boolean }>(
+      `/customer/table/${token}/start-session`,
+      { method: 'POST', body: JSON.stringify(data) }
+    )
     if (result.data?.sessionToken) {
-      setTableSession(result.data.sessionToken)
+      setTableSession(result.data.sessionToken, token)
+    }
+    return result
+  },
+
+  getSessionStatus: async (token: string) => {
+    const result = await request<{ approved: boolean; sessionToken?: string }>(
+      `/customer/table/${token}/session-status`
+    )
+    if (result.data?.sessionToken) {
+      setTableSession(result.data.sessionToken, token)
     }
     return result
   },

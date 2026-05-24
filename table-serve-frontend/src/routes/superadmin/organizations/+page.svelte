@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { goto } from '$app/navigation'
   import { superAdminApi } from '$lib/api'
+  import { fmtDate } from '$lib/date'
   import { addToast } from '$lib/stores/toast'
   import Card from '$lib/components/ui/Card.svelte'
   import Button from '$lib/components/ui/Button.svelte'
@@ -196,9 +197,9 @@
                 {org.slug} {#if org.email} &middot; {org.email}{/if}
               </p>
               <p class="text-xs text-neutral-400 dark:text-neutral-500 mt-0.5">
-                Created {new Date(org.createdAt).toLocaleDateString()}
+                Created {fmtDate(org.createdAt)}
                 {#if org.subscriptionExpiry}
-                  &middot; Expires {new Date(org.subscriptionExpiry).toLocaleDateString()}
+                  &middot; Expires {fmtDate(org.subscriptionExpiry)}
                 {/if}
               </p>
             </div>

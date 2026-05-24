@@ -32,6 +32,7 @@ import {
   analyticsQuerySchema,
   createWaiterSchema,
   updateWaiterSchema,
+  tableSessionSettingsSchema,
 } from '../lib/validators'
 
 const adminRouter = new Hono<{ Variables: { user: any } }>()
@@ -211,6 +212,46 @@ adminRouter.post('/kds-token/regenerate', requireOrgAdmin, async (c) => {
   const token = crypto.randomUUID() + '-' + crypto.randomUUID()
   await db.update(organizationProfile).set({ kdsToken: token, updatedAt: new Date() }).where(eq(organizationProfile.organizationId, orgId))
   return c.json({ kdsToken: token, kdsUrl: `/kds/${token}` })
+})
+
+// ─── Table Session Security Settings ─────────
+
+adminRouter.get('/table-session-settings', async (c) => {
+  const orgId = getOrgId(c)
+  const currentUser = c.get('user') as any
+  if (currentUser.role !== 'superadmin') {
+    const access = await verifyOrgAccess(currentUser.id, orgId)
+    if (!access) return c.json({ error: 'Access denied.' }, 403)
+  }
+
+  const [profile] = await db
+    .select({
+      collectCustomerDetails: organizationProfile.collectCustomerDetails,
+      requireOrderingOtp: organizationProfile.requireOrderingOtp,
+      requireSessionApproval: organizationProfile.requireSessionApproval,
+    })
+    .from(organizationProfile)
+    .where(eq(organizationProfile.organizationId, orgId))
+    .limit(1)
+
+  return c.json(profile ?? { collectCustomerDetails: false, requireOrderingOtp: false, requireSessionApproval: false })
+})
+
+adminRouter.patch('/table-session-settings', zv(tableSessionSettingsSchema), async (c) => {
+  const orgId = getOrgId(c)
+  const currentUser = c.get('user') as any
+  if (currentUser.role !== 'superadmin') {
+    const access = await verifyOrgAccess(currentUser.id, orgId)
+    if (!access) return c.json({ error: 'Access denied.' }, 403)
+  }
+
+  const data = c.req.valid('json')
+  await db
+    .update(organizationProfile)
+    .set({ ...data, updatedAt: new Date() })
+    .where(eq(organizationProfile.organizationId, orgId))
+
+  return c.json({ message: 'Security settings updated.' })
 })
 
 // ─── Dashboard ───────────────────────────────
@@ -678,10 +719,98 @@ adminRouter.post('/tables/:id/end-session', async (c) => {
   // previous orders on the customer's My Orders panel even if their JWT is still valid.
   await db
     .update(restaurantTable)
-    .set({ billRequested: false, sessionStartedAt: null, updatedAt: new Date() })
+    .set({
+      billRequested: false,
+      sessionStartedAt: null,
+      sessionApproved: true,
+      customerName: null,
+      partySize: null,
+      sessionOtp: null,
+      sessionOtpExpiry: null,
+      updatedAt: new Date(),
+    })
     .where(eq(restaurantTable.id, id))
 
   return c.json({ message: 'Table session ended. All active orders marked as served.' })
+})
+
+// ─── Generate OTP for a table ─────────────────
+
+adminRouter.post('/tables/:id/generate-otp', async (c) => {
+  const orgId = getOrgId(c)
+  const { id } = c.req.param()
+
+  const [existing] = await db
+    .select()
+    .from(restaurantTable)
+    .where(and(eq(restaurantTable.id, id), eq(restaurantTable.organizationId, orgId)))
+    .limit(1)
+
+  if (!existing) return c.json({ error: 'Table not found.' }, 404)
+
+  const otp = Math.floor(100000 + Math.random() * 900000).toString()
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000) // 10 minutes
+
+  await db
+    .update(restaurantTable)
+    .set({ sessionOtp: otp, sessionOtpExpiry: expiresAt, updatedAt: new Date() })
+    .where(eq(restaurantTable.id, id))
+
+  return c.json({ otp, expiresAt: expiresAt.toISOString() })
+})
+
+// ─── Approve pending table session ────────────
+
+adminRouter.post('/tables/:id/approve-session', async (c) => {
+  const orgId = getOrgId(c)
+  const { id } = c.req.param()
+
+  const [existing] = await db
+    .select()
+    .from(restaurantTable)
+    .where(and(eq(restaurantTable.id, id), eq(restaurantTable.organizationId, orgId)))
+    .limit(1)
+
+  if (!existing) return c.json({ error: 'Table not found.' }, 404)
+
+  await db
+    .update(restaurantTable)
+    .set({ sessionApproved: true, updatedAt: new Date() })
+    .where(eq(restaurantTable.id, id))
+
+  return c.json({ message: 'Session approved.' })
+})
+
+// ─── Get current session orders for a table ───
+
+adminRouter.get('/tables/:id/orders', async (c) => {
+  const orgId = getOrgId(c)
+  const { id } = c.req.param()
+
+  const [tableRow] = await db
+    .select({ sessionStartedAt: restaurantTable.sessionStartedAt })
+    .from(restaurantTable)
+    .where(and(eq(restaurantTable.id, id), eq(restaurantTable.organizationId, orgId)))
+    .limit(1)
+
+  if (!tableRow) return c.json({ error: 'Table not found.' }, 404)
+
+  const whereClause = tableRow.sessionStartedAt
+    ? and(eq(order.tableId, id), gte(order.createdAt, tableRow.sessionStartedAt))
+    : eq(order.tableId, id)
+
+  const orders = await db
+    .select()
+    .from(order)
+    .where(whereClause)
+    .orderBy(asc(order.createdAt))
+
+  if (!orders.length) return c.json({ orders: [], items: [] })
+
+  const orderIds = orders.map((o) => o.id)
+  const items = await db.select().from(orderItem).where(inArray(orderItem.orderId, orderIds))
+
+  return c.json({ orders, items })
 })
 
 // ─── Orders ──────────────────────────────────
@@ -807,95 +936,280 @@ adminRouter.get('/analytics', zvq(analyticsQuerySchema), async (c) => {
     lte(order.createdAt, to),
   ]
 
-  const [summary] = await db
+  try {
+    const [summaryRow] = await db
+      .select({
+        totalOrders: count(),
+        totalRevenue: sum(order.totalAmount),
+        avgOrderValue: avg(order.totalAmount),
+      })
+      .from(order)
+      .where(and(...baseConditions))
+
+    const summary = {
+      totalOrders: Number(summaryRow?.totalOrders ?? 0),
+      totalRevenue: summaryRow?.totalRevenue ?? '0',
+      avgOrderValue: summaryRow?.avgOrderValue ?? '0',
+    }
+
+    const byStatus = await db
+      .select({ status: order.status, count: count() })
+      .from(order)
+      .where(and(...baseConditions))
+      .groupBy(order.status)
+
+    const topItems = await db
+      .select({
+        menuItemId: orderItem.menuItemId,
+        name: orderItem.menuItemName,
+        totalQuantity: sum(orderItem.quantity),
+        totalRevenue: sum(orderItem.totalPrice),
+        orderCount: count(),
+      })
+      .from(orderItem)
+      .innerJoin(order, eq(orderItem.orderId, order.id))
+      .where(and(...baseConditions))
+      .groupBy(orderItem.menuItemId, orderItem.menuItemName)
+      .orderBy(desc(sum(orderItem.quantity)))
+      .limit(10)
+
+    const slowItems = await db
+      .select({
+        menuItemId: orderItem.menuItemId,
+        name: orderItem.menuItemName,
+        totalQuantity: sum(orderItem.quantity),
+      })
+      .from(orderItem)
+      .innerJoin(order, eq(orderItem.orderId, order.id))
+      .where(and(...baseConditions))
+      .groupBy(orderItem.menuItemId, orderItem.menuItemName)
+      .orderBy(asc(sum(orderItem.quantity)))
+      .limit(5)
+
+    const dailyRevenue = await db
+      .select({
+        date: sql<string>`DATE(${order.createdAt})`,
+        revenue: sum(order.totalAmount),
+        orders: count(),
+      })
+      .from(order)
+      .where(and(...baseConditions))
+      .groupBy(sql`DATE(${order.createdAt})`)
+      .orderBy(sql`DATE(${order.createdAt})`)
+
+    const hourlyDistribution = await db
+      .select({
+        hour: sql<number>`EXTRACT(HOUR FROM ${order.createdAt})::int`,
+        orders: count(),
+      })
+      .from(order)
+      .where(and(...baseConditions))
+      .groupBy(sql`EXTRACT(HOUR FROM ${order.createdAt})::int`)
+      .orderBy(sql`EXTRACT(HOUR FROM ${order.createdAt})::int`)
+
+    const revenueByCategory = await db
+      .select({
+        categoryId: menuItem.categoryId,
+        categoryName: menuCategory.name,
+        totalRevenue: sum(orderItem.totalPrice),
+        totalQuantity: sum(orderItem.quantity),
+      })
+      .from(orderItem)
+      .innerJoin(order, eq(orderItem.orderId, order.id))
+      .innerJoin(menuItem, eq(orderItem.menuItemId, menuItem.id))
+      .leftJoin(menuCategory, eq(menuItem.categoryId, menuCategory.id))
+      .where(and(...baseConditions))
+      .groupBy(menuItem.categoryId, menuCategory.name)
+      .orderBy(desc(sum(orderItem.totalPrice)))
+
+    return c.json({
+      period: { from, to },
+      summary,
+      byStatus,
+      topItems,
+      slowItems,
+      dailyRevenue,
+      hourlyDistribution,
+      revenueByCategory,
+    })
+  } catch (err: any) {
+    console.error('[admin/analytics] error:', err)
+    return c.json({ error: 'Failed to load analytics.' }, 500)
+  }
+})
+
+// ─── Reports ─────────────────────────────────
+
+adminRouter.get('/reports', zvq(analyticsQuerySchema), async (c) => {
+  const orgId = getOrgId(c)
+  const { period } = c.req.valid('query')
+
+  const now = new Date()
+  let from: Date = new Date(now.getFullYear(), now.getMonth(), 1)
+  const to: Date = now
+
+  switch (period) {
+    case 'today': from = new Date(now.getFullYear(), now.getMonth(), now.getDate()); break
+    case 'week':  from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); break
+    case 'month': from = new Date(now.getFullYear(), now.getMonth(), 1); break
+    case 'quarter': from = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000); break
+    case 'year': from = new Date(now.getFullYear(), 0, 1); break
+  }
+
+  try {
+    const conditions = [eq(order.organizationId, orgId), gte(order.createdAt, from), lte(order.createdAt, to)]
+
+    const byTable = await db
+      .select({
+        tableId: order.tableId,
+        tableName: restaurantTable.name,
+        orders: count(),
+        revenue: sum(order.totalAmount),
+      })
+      .from(order)
+      .leftJoin(restaurantTable, eq(order.tableId, restaurantTable.id))
+      .where(and(...conditions))
+      .groupBy(order.tableId, restaurantTable.name)
+      .orderBy(desc(sum(order.totalAmount)))
+      .limit(20)
+
+    const byHour = await db
+      .select({
+        hour: sql<number>`EXTRACT(HOUR FROM ${order.createdAt})::int`,
+        orders: count(),
+        revenue: sum(order.totalAmount),
+      })
+      .from(order)
+      .where(and(...conditions))
+      .groupBy(sql`EXTRACT(HOUR FROM ${order.createdAt})::int`)
+      .orderBy(sql`EXTRACT(HOUR FROM ${order.createdAt})::int`)
+
+    const byDow = await db
+      .select({
+        dow: sql<number>`EXTRACT(DOW FROM ${order.createdAt})::int`,
+        orders: count(),
+        revenue: sum(order.totalAmount),
+      })
+      .from(order)
+      .where(and(...conditions))
+      .groupBy(sql`EXTRACT(DOW FROM ${order.createdAt})::int`)
+      .orderBy(sql`EXTRACT(DOW FROM ${order.createdAt})::int`)
+
+    const funnel = await db
+      .select({ status: order.status, count: count() })
+      .from(order)
+      .where(and(...conditions))
+      .groupBy(order.status)
+
+    const avgFulfillment = await db
+      .select({
+        avg: sql<string>`AVG(EXTRACT(EPOCH FROM (${order.updatedAt} - ${order.createdAt})) / 60)`,
+      })
+      .from(order)
+      .where(and(...conditions, eq(order.status, 'served')))
+
+    const dailyTrend = await db
+      .select({
+        date: sql<string>`DATE(${order.createdAt})`,
+        revenue: sum(order.totalAmount),
+        orders: count(),
+      })
+      .from(order)
+      .where(and(...conditions))
+      .groupBy(sql`DATE(${order.createdAt})`)
+      .orderBy(sql`DATE(${order.createdAt})`)
+
+    return c.json({
+      period: { from, to },
+      byTable,
+      byHour,
+      byDow,
+      funnel,
+      avgFulfillmentMinutes: parseFloat(avgFulfillment[0]?.avg ?? '0'),
+      dailyTrend,
+    })
+  } catch (err: any) {
+    console.error('[admin/reports] error:', err)
+    return c.json({ error: 'Failed to load reports.' }, 500)
+  }
+})
+
+// ─── Export Orders CSV ───────────────────────
+
+adminRouter.get('/export/orders', zvq(analyticsQuerySchema), async (c) => {
+  const orgId = getOrgId(c)
+  const { period } = c.req.valid('query')
+
+  const now = new Date()
+  let from: Date = new Date(now.getFullYear(), now.getMonth(), 1)
+  const to: Date = now
+
+  switch (period) {
+    case 'today': from = new Date(now.getFullYear(), now.getMonth(), now.getDate()); break
+    case 'week':  from = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000); break
+    case 'month': from = new Date(now.getFullYear(), now.getMonth(), 1); break
+    case 'quarter': from = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000); break
+    case 'year': from = new Date(now.getFullYear(), 0, 1); break
+  }
+
+  const orders = await db
     .select({
-      totalOrders: count(),
-      totalRevenue: sum(order.totalAmount),
-      avgOrderValue: avg(order.totalAmount),
+      id: order.id,
+      createdAt: order.createdAt,
+      status: order.status,
+      totalAmount: order.totalAmount,
+      tableId: order.tableId,
+      customerName: order.customerName,
+      notes: order.notes,
     })
     .from(order)
-    .where(and(...baseConditions))
+    .where(and(eq(order.organizationId, orgId), gte(order.createdAt, from), lte(order.createdAt, to)))
+    .orderBy(desc(order.createdAt))
 
-  const byStatus = await db
-    .select({ status: order.status, count: count() })
-    .from(order)
-    .where(and(...baseConditions))
-    .groupBy(order.status)
+  if (!orders.length) {
+    c.header('Content-Type', 'text/csv')
+    c.header('Content-Disposition', `attachment; filename="orders-${period ?? 'month'}.csv"`)
+    return c.body('Order ID,Date,Time,Status,Customer,Table,Notes,Total\n')
+  }
 
-  const topItems = await db
-    .select({
-      menuItemId: orderItem.menuItemId,
-      name: orderItem.menuItemName,
-      totalQuantity: sum(orderItem.quantity),
-      totalRevenue: sum(orderItem.totalPrice),
-      orderCount: count(),
-    })
-    .from(orderItem)
-    .innerJoin(order, eq(orderItem.orderId, order.id))
-    .where(and(...baseConditions))
-    .groupBy(orderItem.menuItemId, orderItem.menuItemName)
-    .orderBy(desc(sum(orderItem.quantity)))
-    .limit(10)
+  const orderIds = orders.map((o) => o.id)
+  const items = await db.select().from(orderItem).where(inArray(orderItem.orderId, orderIds))
 
-  const slowItems = await db
-    .select({
-      menuItemId: orderItem.menuItemId,
-      name: orderItem.menuItemName,
-      totalQuantity: sum(orderItem.quantity),
-    })
-    .from(orderItem)
-    .innerJoin(order, eq(orderItem.orderId, order.id))
-    .where(and(...baseConditions))
-    .groupBy(orderItem.menuItemId, orderItem.menuItemName)
-    .orderBy(asc(sum(orderItem.quantity)))
-    .limit(5)
+  // Fetch table names
+  const tableIds = [...new Set(orders.map((o) => o.tableId).filter(Boolean) as string[])]
+  const tables = tableIds.length
+    ? await db.select({ id: restaurantTable.id, name: restaurantTable.name }).from(restaurantTable).where(inArray(restaurantTable.id, tableIds))
+    : []
+  const tableMap = Object.fromEntries(tables.map((t) => [t.id, t.name]))
 
-  const dailyRevenue = await db
-    .select({
-      date: sql<string>`DATE(${order.createdAt})`,
-      revenue: sum(order.totalAmount),
-      orders: count(),
-    })
-    .from(order)
-    .where(and(...baseConditions))
-    .groupBy(sql`DATE(${order.createdAt})`)
-    .orderBy(sql`DATE(${order.createdAt})`)
+  const itemsByOrder = items.reduce<Record<string, typeof items>>((acc, item) => {
+    ;(acc[item.orderId] ??= []).push(item)
+    return acc
+  }, {})
 
-  const hourlyDistribution = await db
-    .select({
-      hour: sql<number>`EXTRACT(HOUR FROM ${order.createdAt})`,
-      orders: count(),
-    })
-    .from(order)
-    .where(and(...baseConditions))
-    .groupBy(sql`EXTRACT(HOUR FROM ${order.createdAt})`)
-    .orderBy(sql`EXTRACT(HOUR FROM ${order.createdAt})`)
+  const escape = (s: string | null | undefined) => `"${(s ?? '').replace(/"/g, '""')}"`
 
-  const revenueByCategory = await db
-    .select({
-      categoryId: menuItem.categoryId,
-      categoryName: menuCategory.name,
-      totalRevenue: sum(orderItem.totalPrice),
-      totalQuantity: sum(orderItem.quantity),
-    })
-    .from(orderItem)
-    .innerJoin(order, eq(orderItem.orderId, order.id))
-    .innerJoin(menuItem, eq(orderItem.menuItemId, menuItem.id))
-    .leftJoin(menuCategory, eq(menuItem.categoryId, menuCategory.id))
-    .where(and(...baseConditions))
-    .groupBy(menuItem.categoryId, menuCategory.name)
-    .orderBy(desc(sum(orderItem.totalPrice)))
-
-  return c.json({
-    period: { from, to },
-    summary,
-    byStatus,
-    topItems,
-    slowItems,
-    dailyRevenue,
-    hourlyDistribution,
-    revenueByCategory,
+  const rows = orders.map((o) => {
+    const date = new Date(o.createdAt)
+    const itemsStr = (itemsByOrder[o.id] ?? []).map((i) => `${i.quantity}x ${i.menuItemName}`).join('; ')
+    return [
+      escape(o.id.slice(0, 8)),
+      escape(date.toLocaleDateString()),
+      escape(date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })),
+      escape(o.status),
+      escape(o.customerName),
+      escape(o.tableId ? tableMap[o.tableId] : ''),
+      escape(itemsStr),
+      escape(o.notes),
+      o.totalAmount ?? '0',
+    ].join(',')
   })
+
+  const csv = ['Order ID,Date,Time,Status,Customer,Table,Items,Notes,Total', ...rows].join('\n')
+
+  c.header('Content-Type', 'text/csv; charset=utf-8')
+  c.header('Content-Disposition', `attachment; filename="orders-${period ?? 'month'}.csv"`)
+  return c.body(csv)
 })
 
 // ─── Members ─────────────────────────────────
@@ -997,9 +1311,7 @@ adminRouter.delete('/members/:id', async (c) => {
 // ─── Waiter Management (Active subscription only) ───────────────────────────
 
 adminRouter.get('/waiters', requireOrgAdmin, requireActiveSubscription, async (c) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers })
-  const orgId = (session as any)?.session?.activeOrganizationId
-  if (!orgId) return c.json({ error: 'No active organization.' }, 400)
+  const orgId = getOrgId(c)
 
   const [profile] = await db.select().from(organizationProfile)
     .where(eq(organizationProfile.organizationId, orgId)).limit(1)
@@ -1026,9 +1338,7 @@ adminRouter.get('/waiters', requireOrgAdmin, requireActiveSubscription, async (c
 })
 
 adminRouter.post('/waiters', requireOrgAdmin, requireActiveSubscription, zv(createWaiterSchema), async (c) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers })
-  const orgId = (session as any)?.session?.activeOrganizationId
-  if (!orgId) return c.json({ error: 'No active organization.' }, 400)
+  const orgId = getOrgId(c)
 
   const { name, email, tableIds } = c.req.valid('json')
 
@@ -1076,9 +1386,7 @@ adminRouter.post('/waiters', requireOrgAdmin, requireActiveSubscription, zv(crea
 // waiter forgets their password — they must change it after first login.
 
 adminRouter.post('/waiters/:id/regenerate-credentials', requireOrgAdmin, requireActiveSubscription, async (c) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers })
-  const orgId = (session as any)?.session?.activeOrganizationId
-  if (!orgId) return c.json({ error: 'No active organization.' }, 400)
+  const orgId = getOrgId(c)
 
   const assignmentId = c.req.param('id') as string
 
@@ -1108,9 +1416,7 @@ adminRouter.post('/waiters/:id/regenerate-credentials', requireOrgAdmin, require
 })
 
 adminRouter.patch('/waiters/:id', requireOrgAdmin, requireActiveSubscription, zv(updateWaiterSchema), async (c) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers })
-  const orgId = (session as any)?.session?.activeOrganizationId
-  if (!orgId) return c.json({ error: 'No active organization.' }, 400)
+  const orgId = getOrgId(c)
 
   const assignmentId = c.req.param('id') as string
   const data = c.req.valid('json')
@@ -1137,9 +1443,7 @@ adminRouter.patch('/waiters/:id', requireOrgAdmin, requireActiveSubscription, zv
 })
 
 adminRouter.delete('/waiters/:id', requireOrgAdmin, requireActiveSubscription, async (c) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers })
-  const orgId = (session as any)?.session?.activeOrganizationId
-  if (!orgId) return c.json({ error: 'No active organization.' }, 400)
+  const orgId = getOrgId(c)
 
   const assignmentId = c.req.param('id') as string
 
@@ -1160,9 +1464,7 @@ adminRouter.delete('/waiters/:id', requireOrgAdmin, requireActiveSubscription, a
 // and a live order count broken down by status.
 
 adminRouter.get('/waiters/:id', requireOrgAdmin, async (c) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers })
-  const orgId = (session as any)?.session?.activeOrganizationId
-  if (!orgId) return c.json({ error: 'No active organization.' }, 400)
+  const orgId = getOrgId(c)
 
   const [profile] = await db.select().from(organizationProfile)
     .where(eq(organizationProfile.organizationId, orgId)).limit(1)
@@ -1241,9 +1543,7 @@ adminRouter.get('/waiters/:id', requireOrgAdmin, async (c) => {
 //   limit   — max rows, default 100
 
 adminRouter.get('/waiters/:id/orders', requireOrgAdmin, async (c) => {
-  const session = await auth.api.getSession({ headers: c.req.raw.headers })
-  const orgId = (session as any)?.session?.activeOrganizationId
-  if (!orgId) return c.json({ error: 'No active organization.' }, 400)
+  const orgId = getOrgId(c)
 
   const [profile] = await db.select().from(organizationProfile)
     .where(eq(organizationProfile.organizationId, orgId)).limit(1)

@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte'
   import { page } from '$app/stores'
   import { kdsApi } from '$lib/api'
+  import { fmtTime } from '$lib/date'
 
   type Status = 'pending' | 'confirmed' | 'preparing' | 'ready'
 
@@ -132,7 +133,7 @@
       <span class="font-bold text-lg tracking-wide">Kitchen Display</span>
       <span class="text-neutral-500 text-sm">{orders.length} active order{orders.length !== 1 ? 's' : ''}</span>
     </div>
-    <span class="text-xs text-neutral-600">Last refresh: {lastRefresh.toLocaleTimeString()}</span>
+    <span class="text-xs text-neutral-600">Last refresh: {fmtTime(lastRefresh)}</span>
   </div>
 
   {#if loading}

@@ -1,0 +1,69 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Start Backend",
+			"type": "shell",
+			"command": "cd table-serve-backend && bun src/index.ts",
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Kill Ports",
+			"type": "shell",
+			"command": "lsof -ti:3000,5173 | xargs kill -9 2>/dev/null; sleep 1 && echo killed",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Backend",
+			"type": "shell",
+			"command": "cd table-serve-backend && bun src/index.ts 2>&1 | grep -v '42701'",
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Frontend",
+			"type": "shell",
+			"command": "cd table-serve-frontend && npm run dev",
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Check Node",
+			"type": "shell",
+			"command": "node --version 2>&1; which node; fnm list 2>/dev/null || echo 'no fnm'; ls ~/.fnm/node-versions/ 2>/dev/null || true",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Reinstall Node",
+			"type": "shell",
+			"command": "brew reinstall node 2>&1 | tail -5",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Test fnm Node",
+			"type": "shell",
+			"command": "eval \"$(fnm env --use-on-cd)\" && fnm use 25 2>/dev/null || fnm use default && node --version && cd table-serve-frontend && node node_modules/.bin/vite dev 2>&1 | head -20",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "Kill 5173",
+			"type": "shell",
+			"command": "lsof -ti:5173 | xargs kill -9 2>/dev/null; sleep 1; echo done",
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

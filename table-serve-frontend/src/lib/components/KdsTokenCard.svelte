@@ -1,6 +1,7 @@
 <script lang="ts">
   import { adminApi } from '$lib/api'
   import { addToast } from '$lib/stores/toast'
+  import { showConfirm } from '$lib/stores/confirm.svelte'
   import Card from '$lib/components/ui/Card.svelte'
   import Button from '$lib/components/ui/Button.svelte'
 
@@ -20,7 +21,7 @@
   }
 
   async function regenerate() {
-    if (!orgId || !confirm('Regenerate KDS token? The old link will stop working immediately.')) return
+    if (!orgId || !await showConfirm({ title: 'Regenerate KDS token', message: 'The old kitchen display link will stop working immediately.', confirmLabel: 'Regenerate', variant: 'warning' })) return
     regenerating = true
     const { data, error } = await adminApi.regenerateKdsToken(orgId)
     regenerating = false

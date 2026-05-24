@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import { adminApi } from '$lib/api'
+  import { fmtTime } from '$lib/date'
   import { activeOrgId } from '$lib/stores/org'
   import { addToast } from '$lib/stores/toast'
   import Badge from '$lib/components/ui/Badge.svelte'
@@ -107,7 +108,7 @@
     <div>
       <h1 class="text-2xl font-bold text-neutral-900 dark:text-neutral-100">Kitchen Display</h1>
       <p class="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
-        Auto-refreshes every 8 seconds &nbsp;·&nbsp; Last: {lastRefresh.toLocaleTimeString()}
+        Auto-refreshes every 8 seconds &nbsp;·&nbsp; Last: {fmtTime(lastRefresh)}
       </p>
     </div>
     <div class="flex items-center gap-3">

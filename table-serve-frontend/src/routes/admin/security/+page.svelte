@@ -1,13 +1,36 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { adminApi } from '$lib/api'
+  import { fmtDateTime } from '$lib/date'
   import { activeOrgId } from '$lib/stores/org'
   import { addToast } from '$lib/stores/toast'
+  import { showConfirm } from '$lib/stores/confirm.svelte'
   import Card from '$lib/components/ui/Card.svelte'
   import Button from '$lib/components/ui/Button.svelte'
   import Input from '$lib/components/ui/Input.svelte'
 
   let orgId = $derived($activeOrgId)
+
+  // ── Table Session Security Settings ──────────────────────
+  let secSettings = $state({ collectCustomerDetails: false, requireOrderingOtp: false, requireSessionApproval: false })
+  let secLoading = $state(true)
+  let secSaving = $state(false)
+
+  async function loadSecSettings() {
+    if (!orgId) return
+    const { data } = await adminApi.getTableSessionSettings(orgId)
+    if (data) secSettings = data
+    secLoading = false
+  }
+
+  async function toggleSetting(key: keyof typeof secSettings) {
+    secSettings[key] = !secSettings[key]
+    secSaving = true
+    const { error } = await adminApi.updateTableSessionSettings(orgId, { [key]: secSettings[key] })
+    secSaving = false
+    if (error) { addToast('error', error); secSettings[key] = !secSettings[key]; return }
+    addToast('success', 'Setting saved.')
+  }
 
   // Change password
   let pwForm = $state({ currentPassword: '', newPassword: '', confirmPassword: '' })
@@ -22,6 +45,7 @@
 
   onMount(async () => {
     await loadSessions()
+    await loadSecSettings()
   })
 
   async function loadSessions() {
@@ -62,7 +86,7 @@
   }
 
   async function revokeAll() {
-    if (!confirm('Sign out of all other devices?')) return
+    if (!await showConfirm({ title: 'Sign out all devices', message: 'All other active sessions will be revoked immediately.', confirmLabel: 'Sign out all', variant: 'danger' })) return
     revokingAll = true
     const { error } = await adminApi.revokeAllOtherSessions(orgId)
     revokingAll = false
@@ -89,8 +113,42 @@
 <div class="p-6 lg:p-8 space-y-6">
   <div>
     <h1 class="text-2xl font-bold text-neutral-900 dark:text-neutral-100">Security</h1>
-    <p class="text-sm text-neutral-500 dark:text-neutral-400 mt-1">Manage your password and active sessions.</p>
+    <p class="text-sm text-neutral-500 dark:text-neutral-400 mt-1">Manage your password, active sessions and table access controls.</p>
   </div>
+
+  <!-- Table Session Security -->
+  <Card>
+    <h2 class="font-semibold text-neutral-900 dark:text-neutral-100 mb-1">Table Session Security</h2>
+    <p class="text-sm text-neutral-500 dark:text-neutral-400 mb-5">Control what happens when a customer scans an NFC tag. These settings apply to all tables in your restaurant.</p>
+
+    {#if secLoading}
+      <div class="space-y-3">
+        {#each Array(3) as _}<div class="h-14 rounded-lg bg-neutral-100 dark:bg-neutral-800 animate-pulse"></div>{/each}
+      </div>
+    {:else}
+      <div class="space-y-3">
+        {#each [
+          { key: 'collectCustomerDetails' as const, label: 'Collect customer details', desc: 'Ask for name and party size before showing the menu.' },
+          { key: 'requireOrderingOtp' as const, label: 'Require ordering OTP', desc: 'Generate a 6-digit code per table. Customer must enter it to start ordering.' },
+          { key: 'requireSessionApproval' as const, label: 'Accept request (approval required)', desc: 'Staff must explicitly approve each scan before the customer can order.' },
+        ] as opt}
+          <button
+            class="w-full flex items-center justify-between p-4 rounded-xl border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-800/50 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition-colors text-left"
+            onclick={() => toggleSetting(opt.key)}
+            disabled={secSaving}
+          >
+            <div class="flex-1 min-w-0 pr-4">
+              <p class="text-sm font-semibold text-neutral-900 dark:text-neutral-100">{opt.label}</p>
+              <p class="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">{opt.desc}</p>
+            </div>
+            <div class="shrink-0 w-11 h-6 rounded-full relative transition-colors {secSettings[opt.key] ? 'bg-brand-600' : 'bg-neutral-300 dark:bg-neutral-600'}">
+              <div class="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow-sm transition-transform {secSettings[opt.key] ? 'translate-x-[1.375rem]' : 'translate-x-0.5'}"></div>
+            </div>
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </Card>
 
   <!-- Change Password -->
   <Card>
@@ -158,7 +216,7 @@
               <p class="text-xs text-neutral-500 dark:text-neutral-400 truncate">
                 {session.ipAddress ?? 'Unknown IP'}
                 {#if session.createdAt}
-                  &nbsp;·&nbsp; Signed in {new Date(session.createdAt).toLocaleString()}
+                  &nbsp;·&nbsp; Signed in {fmtDateTime(session.createdAt)}
                 {/if}
               </p>
               {#if session.current}

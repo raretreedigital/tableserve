@@ -11,6 +11,7 @@
   let period = $state<Period>('month')
   let data = $state<AnalyticsResponse | null>(null)
   let loading = $state(true)
+  let exporting = $state(false)
 
   async function load() {
     if (!orgId) { loading = false; return }
@@ -18,6 +19,24 @@
     const res = await adminApi.getAnalytics(orgId, period)
     if (res.data) data = res.data as AnalyticsResponse
     loading = false
+  }
+
+  async function exportCsv() {
+    if (!orgId) return
+    exporting = true
+    try {
+      const res = await adminApi.exportOrders(orgId, period)
+      if (!res.ok) { exporting = false; return }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `orders-${period}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    } finally {
+      exporting = false
+    }
   }
 
   onMount(() => {
@@ -56,18 +75,30 @@
       <h1 class="text-2xl font-bold text-neutral-900 dark:text-neutral-100">Analytics</h1>
       <p class="text-sm text-neutral-500 dark:text-neutral-400 mt-1">Performance insights for your restaurant.</p>
     </div>
-    <div class="flex rounded-lg overflow-hidden border border-neutral-200 dark:border-neutral-700">
-      {#each periods as p}
-        <button
-          class="px-3 py-1.5 text-sm font-medium transition-colors
-            {period === p.value
-              ? 'bg-brand-600 text-white'
-              : 'bg-white dark:bg-neutral-900 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800'}"
-          onclick={() => (period = p.value)}
-        >
-          {p.label}
-        </button>
-      {/each}
+    <div class="flex items-center gap-3">
+      <button
+        class="h-9 px-3 rounded-lg border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 text-sm font-medium text-neutral-700 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-700 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+        onclick={exportCsv}
+        disabled={exporting}
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+        </svg>
+        {exporting ? 'Exporting...' : 'Export CSV'}
+      </button>
+      <div class="flex rounded-lg overflow-hidden border border-neutral-200 dark:border-neutral-700">
+        {#each periods as p}
+          <button
+            class="px-3 py-1.5 text-sm font-medium transition-colors
+              {period === p.value
+                ? 'bg-brand-600 text-white'
+                : 'bg-white dark:bg-neutral-900 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-50 dark:hover:bg-neutral-800'}"
+            onclick={() => (period = p.value)}
+          >
+            {p.label}
+          </button>
+        {/each}
+      </div>
     </div>
   </div>
 

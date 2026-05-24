@@ -88,6 +88,14 @@ import { db as _db } from './db'
 import { sql as _sql } from 'drizzle-orm'
 _db.execute(_sql`ALTER TABLE restaurant_table ADD COLUMN IF NOT EXISTS bill_requested boolean NOT NULL DEFAULT false`).catch(() => {})
 _db.execute(_sql`ALTER TABLE organization_profile ADD COLUMN IF NOT EXISTS kds_token text`).catch(() => {})
+_db.execute(_sql`ALTER TABLE organization_profile ADD COLUMN IF NOT EXISTS collect_customer_details boolean NOT NULL DEFAULT false`).catch(() => {})
+_db.execute(_sql`ALTER TABLE organization_profile ADD COLUMN IF NOT EXISTS require_ordering_otp boolean NOT NULL DEFAULT false`).catch(() => {})
+_db.execute(_sql`ALTER TABLE organization_profile ADD COLUMN IF NOT EXISTS require_session_approval boolean NOT NULL DEFAULT false`).catch(() => {})
+_db.execute(_sql`ALTER TABLE restaurant_table ADD COLUMN IF NOT EXISTS session_approved boolean NOT NULL DEFAULT true`).catch(() => {})
+_db.execute(_sql`ALTER TABLE restaurant_table ADD COLUMN IF NOT EXISTS customer_name text`).catch(() => {})
+_db.execute(_sql`ALTER TABLE restaurant_table ADD COLUMN IF NOT EXISTS party_size integer`).catch(() => {})
+_db.execute(_sql`ALTER TABLE restaurant_table ADD COLUMN IF NOT EXISTS session_otp text`).catch(() => {})
+_db.execute(_sql`ALTER TABLE restaurant_table ADD COLUMN IF NOT EXISTS session_otp_expiry timestamptz`).catch(() => {})
 _db.execute(_sql`ALTER TABLE restaurant_table ADD COLUMN IF NOT EXISTS session_started_at timestamptz`).catch(() => {})
 
 export default {

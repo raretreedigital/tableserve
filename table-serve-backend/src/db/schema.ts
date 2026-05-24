@@ -146,6 +146,12 @@ export const organizationProfile = pgTable('organization_profile', {
   supportName: text('support_name'),
   orderEditWindowMinutes: integer('order_edit_window_minutes').notNull().default(5),
   kdsToken: text('kds_token'),
+  // Table session security
+  collectCustomerDetails: boolean('collect_customer_details').notNull().default(false),
+  requireOrderingOtp: boolean('require_ordering_otp').notNull().default(false),
+  requireSessionApproval: boolean('require_session_approval').notNull().default(false),
+  // Receipt customization
+  receiptSettings: jsonb('receipt_settings'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 })
@@ -164,6 +170,11 @@ export const restaurantTable = pgTable('restaurant_table', {
   isActive: boolean('is_active').notNull().default(true),
   billRequested: boolean('bill_requested').notNull().default(false),
   sessionStartedAt: timestamp('session_started_at'),
+  sessionApproved: boolean('session_approved').notNull().default(true),
+  customerName: text('customer_name'),
+  partySize: integer('party_size'),
+  sessionOtp: text('session_otp'),
+  sessionOtpExpiry: timestamp('session_otp_expiry'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 })

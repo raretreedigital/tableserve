@@ -10,6 +10,7 @@ import {
   order,
   orderItem,
   menuItem,
+  restaurantTable,
 } from '../db/schema'
 import { requireSuperAdmin } from '../middleware/auth-middleware'
 import { auth } from '../lib/auth'
@@ -350,61 +351,135 @@ superAdminRouter.get('/analytics', zvq(analyticsQuerySchema), async (c) => {
       break
   }
 
-  const [totalRevenue] = await db
-    .select({ total: sum(order.totalAmount), count: count() })
-    .from(order)
-    .where(and(gte(order.createdAt, from), lte(order.createdAt, to)))
+  try {
+    const [totalRevenueRow] = await db
+      .select({ total: sum(order.totalAmount), count: count() })
+      .from(order)
+      .where(and(gte(order.createdAt, from), lte(order.createdAt, to)))
 
-  const topItems = await db
-    .select({
-      menuItemId: orderItem.menuItemId,
-      name: orderItem.menuItemName,
-      totalQuantity: sum(orderItem.quantity),
-      totalRevenue: sum(orderItem.totalPrice),
+    const totalOrders = Number(totalRevenueRow?.count ?? 0)
+    const totalRevAmt = parseFloat(totalRevenueRow?.total ?? '0')
+
+    const topItems = await db
+      .select({
+        menuItemId: orderItem.menuItemId,
+        name: orderItem.menuItemName,
+        totalQuantity: sum(orderItem.quantity),
+        totalRevenue: sum(orderItem.totalPrice),
+      })
+      .from(orderItem)
+      .innerJoin(order, eq(orderItem.orderId, order.id))
+      .where(and(gte(order.createdAt, from), lte(order.createdAt, to)))
+      .groupBy(orderItem.menuItemId, orderItem.menuItemName)
+      .orderBy(desc(sum(orderItem.quantity)))
+      .limit(10)
+
+    const orgRevenue = await db
+      .select({
+        organizationId: order.organizationId,
+        name: organization.name,
+        totalRevenue: sum(order.totalAmount),
+        orderCount: count(),
+      })
+      .from(order)
+      .innerJoin(organization, eq(order.organizationId, organization.id))
+      .where(and(gte(order.createdAt, from), lte(order.createdAt, to)))
+      .groupBy(order.organizationId, organization.name)
+      .orderBy(desc(sum(order.totalAmount)))
+      .limit(10)
+
+    const dailyRevenue = await db
+      .select({
+        date: sql<string>`DATE(${order.createdAt})`,
+        revenue: sum(order.totalAmount),
+        orders: count(),
+      })
+      .from(order)
+      .where(and(gte(order.createdAt, from), lte(order.createdAt, to)))
+      .groupBy(sql`DATE(${order.createdAt})`)
+      .orderBy(sql`DATE(${order.createdAt})`)
+
+    const byHour = await db
+      .select({
+        hour: sql<number>`EXTRACT(HOUR FROM ${order.createdAt})::int`,
+        orders: count(),
+        revenue: sum(order.totalAmount),
+      })
+      .from(order)
+      .where(and(gte(order.createdAt, from), lte(order.createdAt, to)))
+      .groupBy(sql`EXTRACT(HOUR FROM ${order.createdAt})::int`)
+      .orderBy(sql`EXTRACT(HOUR FROM ${order.createdAt})::int`)
+
+    const byDow = await db
+      .select({
+        dow: sql<number>`EXTRACT(DOW FROM ${order.createdAt})::int`,
+        orders: count(),
+        revenue: sum(order.totalAmount),
+      })
+      .from(order)
+      .where(and(gte(order.createdAt, from), lte(order.createdAt, to)))
+      .groupBy(sql`EXTRACT(DOW FROM ${order.createdAt})::int`)
+      .orderBy(sql`EXTRACT(DOW FROM ${order.createdAt})::int`)
+
+    const orgGrowth = await db
+      .select({
+        date: sql<string>`DATE(${organization.createdAt})`,
+        newOrgs: count(),
+      })
+      .from(organization)
+      .where(and(gte(organization.createdAt, from), lte(organization.createdAt, to)))
+      .groupBy(sql`DATE(${organization.createdAt})`)
+      .orderBy(sql`DATE(${organization.createdAt})`)
+
+    const statusBreakdown = await db
+      .select({
+        status: order.status,
+        count: count(),
+      })
+      .from(order)
+      .where(and(gte(order.createdAt, from), lte(order.createdAt, to)))
+      .groupBy(order.status)
+
+    const planDistribution = await db
+      .select({
+        plan: organizationProfile.subscriptionPlan,
+        count: count(),
+      })
+      .from(organizationProfile)
+      .groupBy(organizationProfile.subscriptionPlan)
+
+    const statusDistribution = await db
+      .select({
+        status: organizationProfile.status,
+        count: count(),
+      })
+      .from(organizationProfile)
+      .groupBy(organizationProfile.status)
+
+    const [tableCountRow] = await db.select({ count: count() }).from(restaurantTable)
+
+    return c.json({
+      period: { from, to },
+      summary: {
+        totalRevenue: totalRevAmt.toFixed(2),
+        totalOrders,
+        avgOrderValue: totalOrders > 0 ? (totalRevAmt / totalOrders).toFixed(2) : '0',
+        totalTables: Number(tableCountRow?.count ?? 0),
+      },
+      topItems,
+      topOrganizations: orgRevenue,
+      dailyRevenue,
+      byHour,
+      byDow,
+      orgGrowth,
+      statusBreakdown,
+      planDistribution,
+      statusDistribution,
     })
-    .from(orderItem)
-    .innerJoin(order, eq(orderItem.orderId, order.id))
-    .where(and(gte(order.createdAt, from), lte(order.createdAt, to)))
-    .groupBy(orderItem.menuItemId, orderItem.menuItemName)
-    .orderBy(desc(sum(orderItem.quantity)))
-    .limit(10)
-
-  const orgRevenue = await db
-    .select({
-      organizationId: order.organizationId,
-      name: organization.name,
-      totalRevenue: sum(order.totalAmount),
-      orderCount: count(),
-    })
-    .from(order)
-    .innerJoin(organization, eq(order.organizationId, organization.id))
-    .where(and(gte(order.createdAt, from), lte(order.createdAt, to)))
-    .groupBy(order.organizationId, organization.name)
-    .orderBy(desc(sum(order.totalAmount)))
-    .limit(10)
-
-  // Daily revenue breakdown
-  const dailyRevenue = await db
-    .select({
-      date: sql<string>`DATE(${order.createdAt})`,
-      revenue: sum(order.totalAmount),
-      orders: count(),
-    })
-    .from(order)
-    .where(and(gte(order.createdAt, from), lte(order.createdAt, to)))
-    .groupBy(sql`DATE(${order.createdAt})`)
-    .orderBy(sql`DATE(${order.createdAt})`)
-
-  return c.json({
-    period: { from, to },
-    summary: {
-      totalRevenue: totalRevenue.total ?? '0',
-      totalOrders: totalRevenue.count,
-    },
-    topItems,
-    topOrganizations: orgRevenue,
-    dailyRevenue,
-  })
+  } catch (err: any) {
+    console.error('[superadmin/analytics] error:', err)
+    return c.json({ error: 'Failed to load analytics.' }, 500)
+  }
 })
 
 // ─── Users ───────────────────────────────────

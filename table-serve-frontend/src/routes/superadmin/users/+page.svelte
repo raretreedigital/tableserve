@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { superAdminApi } from '$lib/api'
+  import { fmtDate } from '$lib/date'
   import { addToast } from '$lib/stores/toast'
   import Card from '$lib/components/ui/Card.svelte'
   import Badge from '$lib/components/ui/Badge.svelte'
@@ -113,7 +114,7 @@
                   {/if}
                 </td>
                 <td class="p-4 text-neutral-500 dark:text-neutral-400">
-                  {new Date(u.createdAt).toLocaleDateString()}
+                  {fmtDate(u.createdAt)}
                 </td>
                 <td class="p-4 text-right">
                   {#if u.banned}

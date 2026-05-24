@@ -3,6 +3,7 @@
   import { adminApi } from '$lib/api'
   import { activeOrgId } from '$lib/stores/org'
   import { addToast } from '$lib/stores/toast'
+  import { showConfirm } from '$lib/stores/confirm.svelte'
   import Card from '$lib/components/ui/Card.svelte'
   import Button from '$lib/components/ui/Button.svelte'
   import Badge from '$lib/components/ui/Badge.svelte'
@@ -70,7 +71,7 @@
   }
 
   async function regen(id: string) {
-    if (!confirm('Generate new credentials? Old password will stop working.')) return
+    if (!await showConfirm({ title: 'Regenerate credentials', message: 'The old password will stop working immediately.', confirmLabel: 'Regenerate', variant: 'warning' })) return
     regenLoading = true
     const { data, error } = await adminApi.regenerateCredentials(orgId, id)
     regenLoading = false

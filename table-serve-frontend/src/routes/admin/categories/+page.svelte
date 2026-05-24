@@ -3,6 +3,7 @@
   import { adminApi } from '$lib/api'
   import { activeOrgId } from '$lib/stores/org'
   import { addToast } from '$lib/stores/toast'
+  import { showConfirm } from '$lib/stores/confirm.svelte'
   import Card from '$lib/components/ui/Card.svelte'
   import Button from '$lib/components/ui/Button.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -79,7 +80,7 @@
   }
 
   async function deleteCategory(id: string) {
-    if (!confirm('Delete this category? Items in it will become uncategorized.')) return
+    if (!await showConfirm({ title: 'Delete category', message: 'Items in it will become uncategorized.', confirmLabel: 'Delete', variant: 'danger' })) return
     const { error } = await adminApi.deleteCategory(orgId, id)
     if (error) { addToast('error', error); return }
     addToast('success', 'Category deleted.')

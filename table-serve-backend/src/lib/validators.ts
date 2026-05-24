@@ -50,7 +50,7 @@ export const updateOrganizationProfileSchema = z.object({
   secondaryColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   accentColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
   fontFamily: z.enum(['Inter', 'Roboto', 'Poppins', 'Playfair Display', 'Lato', 'Montserrat']).optional(),
-  bannerUrl: z.string().url().optional().or(z.literal('')),
+  bannerUrl: z.union([z.string().url(), z.string().startsWith('data:')]).optional().or(z.literal('')),
   menuLayout: z.enum(['grid', 'list']).optional(),
   showCalories: z.boolean().optional(),
   showAllergens: z.boolean().optional(),
@@ -62,7 +62,7 @@ export const updateOrganizationProfileSchema = z.object({
   serviceChargeRate: z.number().min(0).max(100).optional(),
   welcomeMessage: z.string().max(500).optional(),
   footerText: z.string().max(300).optional(),
-  logoUrl: z.string().url().optional().or(z.literal('')),
+  logoUrl: z.union([z.string().url(), z.string().startsWith('data:')]).optional().or(z.literal('')),
   supportName: z.string().max(100).optional(),
   orderEditWindowMinutes: z.number().int().min(0).max(60).optional(),
   socialLinks: z
@@ -71,6 +71,18 @@ export const updateOrganizationProfileSchema = z.object({
       facebook: z.string().optional(),
       twitter: z.string().optional(),
       website: z.string().optional(),
+    })
+    .optional(),
+  receiptSettings: z
+    .object({
+      headerNote: z.string().max(300).optional(),
+      footerNote: z.string().max(300).optional(),
+      thankYouMessage: z.string().max(200).optional(),
+      showTax: z.boolean().optional(),
+      showServiceCharge: z.boolean().optional(),
+      showOrderId: z.boolean().optional(),
+      showLogo: z.boolean().optional(),
+      showItemizedList: z.boolean().optional(),
     })
     .optional(),
 })
@@ -195,4 +207,18 @@ export const updateWaiterSchema = z.object({
 
 export const updateWaiterDutyStatusSchema = z.object({
   dutyStatus: z.enum(['on_duty', 'on_leave', 'off_shift']),
+})
+
+// ─── Table session / security ─────────────────
+
+export const startSessionSchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  partySize: z.number().int().min(1).max(50).optional(),
+  otp: z.string().length(6).optional(),
+})
+
+export const tableSessionSettingsSchema = z.object({
+  collectCustomerDetails: z.boolean().optional(),
+  requireOrderingOtp: z.boolean().optional(),
+  requireSessionApproval: z.boolean().optional(),
 })

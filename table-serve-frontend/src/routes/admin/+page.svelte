@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { adminApi } from '$lib/api'
+  import { fmtTime } from '$lib/date'
   import { activeOrgId } from '$lib/stores/org'
   import Card from '$lib/components/ui/Card.svelte'
   import Badge from '$lib/components/ui/Badge.svelte'
@@ -106,7 +107,7 @@
                   {#if order.customerName} - {order.customerName}{/if}
                 </p>
                 <p class="text-xs text-neutral-500 dark:text-neutral-400">
-                  {new Date(order.createdAt).toLocaleTimeString()}
+                  {fmtTime(order.createdAt)}
                 </p>
               </div>
               <div class="flex items-center gap-3">

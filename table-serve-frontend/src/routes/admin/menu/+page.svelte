@@ -3,6 +3,7 @@
   import { adminApi } from '$lib/api'
   import { activeOrgId } from '$lib/stores/org'
   import { addToast } from '$lib/stores/toast'
+  import { showConfirm } from '$lib/stores/confirm.svelte'
   import Card from '$lib/components/ui/Card.svelte'
   import Button from '$lib/components/ui/Button.svelte'
   import Badge from '$lib/components/ui/Badge.svelte'
@@ -149,7 +150,7 @@
   }
 
   async function deleteItem(id: string) {
-    if (!confirm('Deactivate this menu item?')) return
+    if (!await showConfirm({ title: 'Deactivate item', message: 'This item will no longer appear on the menu.', confirmLabel: 'Deactivate', variant: 'warning' })) return
     const { error } = await adminApi.deleteMenuItem(orgId, id)
     if (error) { addToast('error', error); return }
     addToast('success', 'Item deactivated.')

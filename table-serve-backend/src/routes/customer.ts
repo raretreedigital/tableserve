@@ -12,7 +12,7 @@ import {
   order,
   orderItem,
 } from '../db/schema'
-import { createOrderSchema, editOrderSchema } from '../lib/validators'
+import { createOrderSchema, editOrderSchema, startSessionSchema } from '../lib/validators'
 import { env } from '../lib/env'
 
 const customerRouter = new Hono()
@@ -140,6 +140,10 @@ customerRouter.get('/table/:token', async (c) => {
       footerText: organizationProfile.footerText,
       socialLinks: organizationProfile.socialLinks,
       description: organizationProfile.description,
+      collectCustomerDetails: organizationProfile.collectCustomerDetails,
+      requireOrderingOtp: organizationProfile.requireOrderingOtp,
+      requireSessionApproval: organizationProfile.requireSessionApproval,
+      receiptSettings: organizationProfile.receiptSettings,
     })
     .from(organization)
     .leftJoin(organizationProfile, eq(organization.id, organizationProfile.organizationId))
@@ -160,23 +164,125 @@ customerRouter.get('/table/:token', async (c) => {
     return c.json({ error: 'This restaurant is not currently available.' }, 403)
   }
 
-  // Record when this session started — used to filter orders on the My Orders panel
-  // so customers never see orders from a previous session at the same table.
-  const sessionStartedAt = new Date()
+  // Return security settings so the client knows what pre-menu steps are required.
+  // The session JWT is issued only via POST /table/:token/start-session.
+  return c.json({
+    table: table[0],
+    organization: org[0],
+    settings: {
+      collectCustomerDetails: org[0].collectCustomerDetails ?? false,
+      requireOrderingOtp: org[0].requireOrderingOtp ?? false,
+      requireSessionApproval: org[0].requireSessionApproval ?? false,
+      receiptSettings: org[0].receiptSettings ?? {},
+    },
+  })
+})
+
+// ─── Start table session ─────────────────────────────────────────────────────
+// Customer calls this after the GET /table/:token with name/party size/OTP.
+// Returns { sessionToken } on success, or { pendingApproval: true } if the
+// admin has enabled the "require session approval" setting.
+
+customerRouter.post('/table/:token/start-session', zv(startSessionSchema), async (c) => {
+  const { token } = c.req.param()
+  const { name, partySize, otp } = c.req.valid('json')
+
+  const [tableRow] = await db
+    .select({
+      id: restaurantTable.id,
+      organizationId: restaurantTable.organizationId,
+      isActive: restaurantTable.isActive,
+      sessionOtp: restaurantTable.sessionOtp,
+      sessionOtpExpiry: restaurantTable.sessionOtpExpiry,
+    })
+    .from(restaurantTable)
+    .where(and(eq(restaurantTable.nfcToken, token), eq(restaurantTable.isActive, true)))
+    .limit(1)
+
+  if (!tableRow) return c.json({ error: 'Invalid or inactive table.' }, 404)
+
+  const [profile] = await db
+    .select({
+      status: organizationProfile.status,
+      collectCustomerDetails: organizationProfile.collectCustomerDetails,
+      requireOrderingOtp: organizationProfile.requireOrderingOtp,
+      requireSessionApproval: organizationProfile.requireSessionApproval,
+    })
+    .from(organizationProfile)
+    .where(eq(organizationProfile.organizationId, tableRow.organizationId))
+    .limit(1)
+
+  if (profile?.status === 'suspended' || profile?.status === 'inactive') {
+    return c.json({ error: 'This restaurant is not currently available.' }, 403)
+  }
+
+  // ── Validate OTP if required ──
+  if (profile?.requireOrderingOtp) {
+    if (!otp) return c.json({ error: 'An OTP is required. Please ask staff for the code.' }, 400)
+    if (!tableRow.sessionOtp || tableRow.sessionOtp !== otp) {
+      return c.json({ error: 'Invalid OTP. Please ask staff for the correct code.' }, 400)
+    }
+    if (tableRow.sessionOtpExpiry && new Date() > tableRow.sessionOtpExpiry) {
+      return c.json({ error: 'OTP has expired. Please ask staff to generate a new one.' }, 400)
+    }
+  }
+
+  // ── Validate name if required ──
+  if (profile?.collectCustomerDetails && !name) {
+    return c.json({ error: 'Your name is required to start ordering.' }, 400)
+  }
+
+  const requiresApproval = profile?.requireSessionApproval ?? false
+  const now = new Date()
+
   await db
     .update(restaurantTable)
-    .set({ sessionStartedAt, updatedAt: sessionStartedAt })
-    .where(eq(restaurantTable.id, table[0].id))
+    .set({
+      sessionStartedAt: now,
+      sessionApproved: !requiresApproval,
+      customerName: name ?? null,
+      partySize: partySize ?? null,
+      sessionOtp: null,        // consume OTP
+      sessionOtpExpiry: null,
+      billRequested: false,
+      updatedAt: now,
+    })
+    .where(eq(restaurantTable.id, tableRow.id))
 
-  // Issue a short-lived table session JWT (90 min) — proves this request originated
-  // from an NFC scan of this specific table. Required for menu browsing and ordering.
-  const sessionToken = await signTableSession(
-    table[0].id,
-    token,
-    table[0].organizationId
-  )
+  if (requiresApproval) {
+    return c.json({ pendingApproval: true })
+  }
 
-  return c.json({ table: table[0], organization: org[0], sessionToken })
+  const sessionToken = await signTableSession(tableRow.id, token, tableRow.organizationId)
+  return c.json({ sessionToken })
+})
+
+// ─── Poll session approval status ────────────────────────────────────────────
+
+customerRouter.get('/table/:token/session-status', async (c) => {
+  const { token } = c.req.param()
+
+  const [tableRow] = await db
+    .select({
+      id: restaurantTable.id,
+      organizationId: restaurantTable.organizationId,
+      sessionApproved: restaurantTable.sessionApproved,
+      sessionStartedAt: restaurantTable.sessionStartedAt,
+    })
+    .from(restaurantTable)
+    .where(and(eq(restaurantTable.nfcToken, token), eq(restaurantTable.isActive, true)))
+    .limit(1)
+
+  if (!tableRow) return c.json({ error: 'Table not found.' }, 404)
+  if (!tableRow.sessionStartedAt) return c.json({ approved: false, reason: 'no_session' })
+
+  if (!tableRow.sessionApproved) {
+    return c.json({ approved: false })
+  }
+
+  // Approved — issue JWT so the customer can proceed to the menu
+  const sessionToken = await signTableSession(tableRow.id, token, tableRow.organizationId)
+  return c.json({ approved: true, sessionToken })
 })
 
 // ─── Get menu for an organization ───────────
@@ -542,7 +648,7 @@ customerRouter.get('/table/:token/orders', async (c) => {
     .limit(1)
 
   if (!tableRow?.sessionStartedAt) {
-    return c.json({ orders: [], billRequested: false })
+    return c.json({ orders: [], billRequested: false, sessionEnded: true })
   }
 
   const orders = await db
