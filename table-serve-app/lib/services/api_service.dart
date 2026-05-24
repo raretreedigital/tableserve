@@ -102,7 +102,7 @@ class ApiService {
 
   Future<Map<String, dynamic>> updateDutyStatus(String dutyStatus) async {
     final res = await _dio.patch(
-      '${AppConstants.baseUrl}/api/waiter/me/duty-status',
+      '/waiter/me/duty-status',
       data: {'dutyStatus': dutyStatus},
     );
     return res.data as Map<String, dynamic>;

@@ -4,7 +4,7 @@ class AppConstants {
   // ── Change this to your backend URL ──────────────────────────────────────────
   static const String baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:3000/api', // Android emulator → localhost
+    defaultValue: 'http://localhost:3000/api', // iOS Simulator → localhost
   );
 
   // Auth endpoints (better-auth)

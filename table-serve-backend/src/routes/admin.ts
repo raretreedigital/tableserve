@@ -12,10 +12,12 @@ import {
   order,
   orderItem,
   user,
+  account,
   waiterAssignment,
 } from '../db/schema'
 import { requireOrgAdmin, requireActiveSubscription } from '../middleware/auth-middleware'
 import { auth } from '../lib/auth'
+import { hashPassword } from 'better-auth/crypto'
 import { log } from '../lib/logger'
 import { env } from '../lib/env'
 import { sendWelcomeEmail, sendNewOrganizationNotification } from '../lib/email'
@@ -1346,36 +1348,52 @@ adminRouter.post('/waiters', requireOrgAdmin, requireActiveSubscription, zv(crea
   const generatedPassword = crypto.randomUUID().slice(0, 8).toUpperCase() +
     crypto.randomUUID().slice(0, 4) + '!1'
 
-  // Check for existing user with that email
+  // Check for existing user with that email/username
   const [existing] = await db.select().from(user).where(eq(user.email, email)).limit(1)
   if (existing) return c.json({ error: 'A user with that email already exists.' }, 409)
 
-  // Create better-auth user
-  const created = await auth.api.signUpEmail({
-    body: { name, email, password: generatedPassword },
-    headers: c.req.raw.headers,
-  })
-  if (!created?.user) return c.json({ error: 'Failed to create waiter account.' }, 400)
+  // Insert user directly — no email verification flow, any email/username accepted
+  const userId = crypto.randomUUID()
+  const hashedPassword = await hashPassword(generatedPassword)
+  const now = new Date()
 
-  // Set role to waiter
-  await db.update(user).set({ role: 'waiter' }).where(eq(user.id, created.user.id))
+  await db.insert(user).values({
+    id: userId,
+    name,
+    email,
+    emailVerified: true,   // no verification needed — admin-created account
+    role: 'waiter',
+    createdAt: now,
+    updatedAt: now,
+  })
+
+  // Create the credential account row so better-auth can authenticate with email+password
+  await db.insert(account).values({
+    id: crypto.randomUUID(),
+    accountId: userId,
+    providerId: 'credential',
+    userId,
+    password: hashedPassword,
+    createdAt: now,
+    updatedAt: now,
+  })
 
   // Create assignment
   const [assignment] = await db
     .insert(waiterAssignment)
     .values({
       organizationId: orgId,
-      userId: created.user.id,
+      userId: userId,
       tableIds: JSON.stringify(tableIds),
       isActive: true,
     })
     .returning()
 
-  log.info('admin:waiter-created', { waiterId: created.user.id, orgId })
+  log.info('admin:waiter-created', { waiterId: userId, orgId })
 
   return c.json({
     message: 'Waiter created. Share these credentials once — they cannot be recovered.',
-    waiterId: created.user.id,
+    waiterId: userId,
     assignmentId: assignment.id,
     credentials: { email, password: generatedPassword },
   }, 201)
@@ -1401,11 +1419,11 @@ adminRouter.post('/waiters/:id/regenerate-credentials', requireOrgAdmin, require
   const newPassword = crypto.randomUUID().slice(0, 8).toUpperCase() +
     crypto.randomUUID().slice(0, 4) + '!1'
 
-  // Use better-auth admin plugin to set password
-  await auth.api.setPassword({
-    body: { newPassword, userId: waiterUser.id },
-    headers: c.req.raw.headers,
-  } as any)
+  // Update the credential account row directly — no email/verification flow
+  const hashedNew = await hashPassword(newPassword)
+  await db.update(account)
+    .set({ password: hashedNew, updatedAt: new Date() })
+    .where(and(eq(account.userId, waiterUser.id), eq(account.providerId, 'credential')))
 
   log.info('admin:waiter-credentials-regenerated', { waiterId: waiterUser.id, orgId })
 
