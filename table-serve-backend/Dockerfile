@@ -15,8 +15,7 @@ RUN bun install --frozen-lockfile
 
 COPY table-serve-backend/ .
 
-# Generate Drizzle client types so they are baked into the image
-RUN bun run db:generate || true
+# Migrations are committed to git — no need to regenerate
 
 # ── Stage 3: Production image ──────────────────────────────────────────────────
 FROM oven/bun:1.2-alpine AS runner
