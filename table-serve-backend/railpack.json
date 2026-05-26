@@ -1,0 +1,5 @@
+{
+  "deploy": {
+    "startCommand": "bun run src/db/migrate.ts && bun run src/index.ts"
+  }
+}
