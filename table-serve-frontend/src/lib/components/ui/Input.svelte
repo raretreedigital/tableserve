@@ -39,8 +39,8 @@
     onblur,
   }: Props = $props()
 
-  const inputId = id ?? `input-${Math.random().toString(36).slice(2)}`
-  const isPassword = type === 'password'
+  let inputId = $derived(id ?? `input-${Math.random().toString(36).slice(2)}`)
+  let isPassword = $derived(type === 'password')
   let showPassword = $state(false)
   let effectiveType = $derived(isPassword ? (showPassword ? 'text' : 'password') : type)
 </script>
