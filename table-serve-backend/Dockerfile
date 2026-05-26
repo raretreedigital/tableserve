@@ -35,8 +35,8 @@ COPY --from=builder /app/drizzle.config.ts ./drizzle.config.ts
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/tsconfig.json ./tsconfig.json
 
-# Expose the Hono server port (default 3000)
-EXPOSE 3000
+# Port is set via PORT env var injected by Railway (default 3000 locally)
+EXPOSE ${PORT:-3000}
 
 # Run DB migrations then start the server
 # Migrations are idempotent — safe to run on every container start
