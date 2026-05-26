@@ -1,9 +1,8 @@
-# ── Stage 1: Install dependencies ─────────────────────────────────────────────
 FROM oven/bun:1.2-alpine AS deps
 
 WORKDIR /app
 
-COPY package.json bun.lock* ./
+COPY table-serve-backend/package.json table-serve-backend/bun.lock* ./
 RUN bun install --frozen-lockfile --production
 
 # ── Stage 2: Build (generate drizzle types / any compile step) ─────────────────
@@ -11,11 +10,10 @@ FROM oven/bun:1.2-alpine AS builder
 
 WORKDIR /app
 
-# Copy all deps (including devDeps for drizzle-kit)
-COPY package.json bun.lock* ./
+COPY table-serve-backend/package.json table-serve-backend/bun.lock* ./
 RUN bun install --frozen-lockfile
 
-COPY . .
+COPY table-serve-backend/ .
 
 # Generate Drizzle client types so they are baked into the image
 RUN bun run db:generate || true
