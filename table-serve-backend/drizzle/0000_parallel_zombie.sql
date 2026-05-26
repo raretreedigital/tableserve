@@ -3,7 +3,7 @@ DO $$ BEGIN CREATE TYPE "public"."order_status" AS ENUM('pending', 'confirmed', 
 DO $$ BEGIN CREATE TYPE "public"."org_status" AS ENUM('active', 'suspended', 'trial', 'inactive'); EXCEPTION WHEN duplicate_object THEN null; END $$--> statement-breakpoint
 DO $$ BEGIN CREATE TYPE "public"."spice_level" AS ENUM('none', 'mild', 'medium', 'hot'); EXCEPTION WHEN duplicate_object THEN null; END $$--> statement-breakpoint
 DO $$ BEGIN CREATE TYPE "public"."subscription_plan" AS ENUM('free', 'basic', 'premium'); EXCEPTION WHEN duplicate_object THEN null; END $$--> statement-breakpoint
-CREATE TABLE "account" (
+CREATE TABLE IF NOT EXISTS "account" (
 	"id" text PRIMARY KEY NOT NULL,
 	"account_id" text NOT NULL,
 	"provider_id" text NOT NULL,
@@ -19,7 +19,7 @@ CREATE TABLE "account" (
 	"updated_at" timestamp NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "invitation" (
+CREATE TABLE IF NOT EXISTS "invitation" (
 	"id" text PRIMARY KEY NOT NULL,
 	"organization_id" text NOT NULL,
 	"email" text NOT NULL,
@@ -30,7 +30,7 @@ CREATE TABLE "invitation" (
 	"created_at" timestamp NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "member" (
+CREATE TABLE IF NOT EXISTS "member" (
 	"id" text PRIMARY KEY NOT NULL,
 	"organization_id" text NOT NULL,
 	"user_id" text NOT NULL,
@@ -38,7 +38,7 @@ CREATE TABLE "member" (
 	"created_at" timestamp NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "menu_category" (
+CREATE TABLE IF NOT EXISTS "menu_category" (
 	"id" text PRIMARY KEY NOT NULL,
 	"organization_id" text NOT NULL,
 	"name" text NOT NULL,
@@ -50,7 +50,7 @@ CREATE TABLE "menu_category" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "menu_item" (
+CREATE TABLE IF NOT EXISTS "menu_item" (
 	"id" text PRIMARY KEY NOT NULL,
 	"organization_id" text NOT NULL,
 	"category_id" text,
@@ -73,7 +73,7 @@ CREATE TABLE "menu_item" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "order" (
+CREATE TABLE IF NOT EXISTS "order" (
 	"id" text PRIMARY KEY NOT NULL,
 	"organization_id" text NOT NULL,
 	"table_id" text,
@@ -91,7 +91,7 @@ CREATE TABLE "order" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE TABLE "order_item" (
+CREATE TABLE IF NOT EXISTS "order_item" (
 	"id" text PRIMARY KEY NOT NULL,
 	"order_id" text NOT NULL,
 	"menu_item_id" text NOT NULL,
@@ -102,7 +102,7 @@ CREATE TABLE "order_item" (
 	"notes" text
 );
 --> statement-breakpoint
-CREATE TABLE "organization" (
+CREATE TABLE IF NOT EXISTS "organization" (
 	"id" text PRIMARY KEY NOT NULL,
 	"name" text NOT NULL,
 	"slug" text,
@@ -112,7 +112,7 @@ CREATE TABLE "organization" (
 	CONSTRAINT "organization_slug_unique" UNIQUE("slug")
 );
 --> statement-breakpoint
-CREATE TABLE "organization_profile" (
+CREATE TABLE IF NOT EXISTS "organization_profile" (
 	"id" text PRIMARY KEY NOT NULL,
 	"organization_id" text NOT NULL,
 	"address" text,
@@ -153,7 +153,7 @@ CREATE TABLE "organization_profile" (
 	CONSTRAINT "organization_profile_organization_id_unique" UNIQUE("organization_id")
 );
 --> statement-breakpoint
-CREATE TABLE "restaurant_table" (
+CREATE TABLE IF NOT EXISTS "restaurant_table" (
 	"id" text PRIMARY KEY NOT NULL,
 	"organization_id" text NOT NULL,
 	"name" text NOT NULL,
@@ -173,7 +173,7 @@ CREATE TABLE "restaurant_table" (
 	CONSTRAINT "restaurant_table_nfc_token_unique" UNIQUE("nfc_token")
 );
 --> statement-breakpoint
-CREATE TABLE "session" (
+CREATE TABLE IF NOT EXISTS "session" (
 	"id" text PRIMARY KEY NOT NULL,
 	"expires_at" timestamp NOT NULL,
 	"token" text NOT NULL,
@@ -187,7 +187,7 @@ CREATE TABLE "session" (
 	CONSTRAINT "session_token_unique" UNIQUE("token")
 );
 --> statement-breakpoint
-CREATE TABLE "user" (
+CREATE TABLE IF NOT EXISTS "user" (
 	"id" text PRIMARY KEY NOT NULL,
 	"name" text NOT NULL,
 	"email" text NOT NULL,
@@ -202,7 +202,7 @@ CREATE TABLE "user" (
 	CONSTRAINT "user_email_unique" UNIQUE("email")
 );
 --> statement-breakpoint
-CREATE TABLE "verification" (
+CREATE TABLE IF NOT EXISTS "verification" (
 	"id" text PRIMARY KEY NOT NULL,
 	"identifier" text NOT NULL,
 	"value" text NOT NULL,
@@ -211,7 +211,7 @@ CREATE TABLE "verification" (
 	"updated_at" timestamp
 );
 --> statement-breakpoint
-CREATE TABLE "waiter_assignment" (
+CREATE TABLE IF NOT EXISTS "waiter_assignment" (
 	"id" text PRIMARY KEY NOT NULL,
 	"organization_id" text NOT NULL,
 	"user_id" text NOT NULL,
