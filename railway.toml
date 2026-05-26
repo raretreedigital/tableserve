@@ -1,0 +1,9 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "table-serve-backend/Dockerfile"
+buildContext = "table-serve-backend"
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "on_failure"
