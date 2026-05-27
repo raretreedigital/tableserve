@@ -346,8 +346,74 @@
       <Card>
         <h2 class="font-semibold text-neutral-900 dark:text-neutral-100 mb-4">Pricing Settings</h2>
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <Input label="Currency Symbol" bind:value={form.currencySymbol} placeholder="$" />
-          <Input label="Currency Code" bind:value={form.currencyCode} placeholder="USD" />
+          <div class="col-span-2">
+            <label for="currency-select" class="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">Currency</label>
+            <select
+              id="currency-select"
+              class="w-full rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              value={`${form.currencyCode}|${form.currencySymbol}`}
+              onchange={(e) => {
+                const [code, symbol] = (e.currentTarget as HTMLSelectElement).value.split('|')
+                form.currencyCode = code
+                form.currencySymbol = symbol
+              }}
+            >
+              {#each [
+                { code: 'USD', symbol: '$', label: 'USD — US Dollar ($)' },
+                { code: 'EUR', symbol: '€', label: 'EUR — Euro (€)' },
+                { code: 'GBP', symbol: '£', label: 'GBP — British Pound (£)' },
+                { code: 'INR', symbol: '₹', label: 'INR — Indian Rupee (₹)' },
+                { code: 'AED', symbol: 'AED', label: 'AED — UAE Dirham (AED)' },
+                { code: 'SGD', symbol: 'S$', label: 'SGD — Singapore Dollar (S$)' },
+                { code: 'AUD', symbol: 'A$', label: 'AUD — Australian Dollar (A$)' },
+                { code: 'CAD', symbol: 'C$', label: 'CAD — Canadian Dollar (C$)' },
+                { code: 'JPY', symbol: '¥', label: 'JPY — Japanese Yen (¥)' },
+                { code: 'CNY', symbol: '¥', label: 'CNY — Chinese Yuan (¥)' },
+                { code: 'CHF', symbol: 'CHF', label: 'CHF — Swiss Franc (CHF)' },
+                { code: 'MYR', symbol: 'RM', label: 'MYR — Malaysian Ringgit (RM)' },
+                { code: 'THB', symbol: '฿', label: 'THB — Thai Baht (฿)' },
+                { code: 'IDR', symbol: 'Rp', label: 'IDR — Indonesian Rupiah (Rp)' },
+                { code: 'PHP', symbol: '₱', label: 'PHP — Philippine Peso (₱)' },
+                { code: 'SAR', symbol: 'SAR', label: 'SAR — Saudi Riyal (SAR)' },
+                { code: 'QAR', symbol: 'QAR', label: 'QAR — Qatari Riyal (QAR)' },
+                { code: 'KWD', symbol: 'KD', label: 'KWD — Kuwaiti Dinar (KD)' },
+                { code: 'BHD', symbol: 'BD', label: 'BHD — Bahraini Dinar (BD)' },
+                { code: 'OMR', symbol: 'OMR', label: 'OMR — Omani Rial (OMR)' },
+                { code: 'NZD', symbol: 'NZ$', label: 'NZD — New Zealand Dollar (NZ$)' },
+                { code: 'ZAR', symbol: 'R', label: 'ZAR — South African Rand (R)' },
+                { code: 'BRL', symbol: 'R$', label: 'BRL — Brazilian Real (R$)' },
+                { code: 'MXN', symbol: 'MX$', label: 'MXN — Mexican Peso (MX$)' },
+                { code: 'KRW', symbol: '₩', label: 'KRW — South Korean Won (₩)' },
+                { code: 'HKD', symbol: 'HK$', label: 'HKD — Hong Kong Dollar (HK$)' },
+                { code: 'TWD', symbol: 'NT$', label: 'TWD — Taiwan Dollar (NT$)' },
+                { code: 'SEK', symbol: 'kr', label: 'SEK — Swedish Krona (kr)' },
+                { code: 'NOK', symbol: 'kr', label: 'NOK — Norwegian Krone (kr)' },
+                { code: 'DKK', symbol: 'kr', label: 'DKK — Danish Krone (kr)' },
+                { code: 'PLN', symbol: 'zł', label: 'PLN — Polish Złoty (zł)' },
+                { code: 'CZK', symbol: 'Kč', label: 'CZK — Czech Koruna (Kč)' },
+                { code: 'HUF', symbol: 'Ft', label: 'HUF — Hungarian Forint (Ft)' },
+                { code: 'TRY', symbol: '₺', label: 'TRY — Turkish Lira (₺)' },
+                { code: 'RUB', symbol: '₽', label: 'RUB — Russian Ruble (₽)' },
+                { code: 'PKR', symbol: '₨', label: 'PKR — Pakistani Rupee (₨)' },
+                { code: 'BDT', symbol: '৳', label: 'BDT — Bangladeshi Taka (৳)' },
+                { code: 'LKR', symbol: 'Rs', label: 'LKR — Sri Lankan Rupee (Rs)' },
+                { code: 'NPR', symbol: 'Rs', label: 'NPR — Nepalese Rupee (Rs)' },
+                { code: 'EGP', symbol: 'E£', label: 'EGP — Egyptian Pound (E£)' },
+                { code: 'NGN', symbol: '₦', label: 'NGN — Nigerian Naira (₦)' },
+                { code: 'KES', symbol: 'KSh', label: 'KES — Kenyan Shilling (KSh)' },
+                { code: 'GHS', symbol: 'GH₵', label: 'GHS — Ghanaian Cedi (GH₵)' },
+                { code: 'MAD', symbol: 'MAD', label: 'MAD — Moroccan Dirham (MAD)' },
+                { code: 'ILS', symbol: '₪', label: 'ILS — Israeli Shekel (₪)' },
+                { code: 'VND', symbol: '₫', label: 'VND — Vietnamese Dong (₫)' },
+                { code: 'COP', symbol: 'CO$', label: 'COP — Colombian Peso (CO$)' },
+                { code: 'ARS', symbol: 'AR$', label: 'ARS — Argentine Peso (AR$)' },
+                { code: 'CLP', symbol: 'CL$', label: 'CLP — Chilean Peso (CL$)' },
+                { code: 'PEN', symbol: 'S/', label: 'PEN — Peruvian Sol (S/)' },
+              ] as c}
+                <option value={`${c.code}|${c.symbol}`}>{c.label}</option>
+              {/each}
+            </select>
+          </div>
           <Input label="Tax Rate (%)" type="number" bind:value={form.taxRate} min="0" max="100" step="0.01" />
           <Input label="Service Charge (%)" type="number" bind:value={form.serviceChargeRate} min="0" max="100" step="0.01" />
         </div>
