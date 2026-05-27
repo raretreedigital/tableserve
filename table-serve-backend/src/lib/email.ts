@@ -44,7 +44,11 @@ async function sendEmail({
 
     if (!res.ok) {
       const body = await res.text()
-      log.error('email-failed', { to, subject, status: res.status, body })
+      if (res.status === 429) {
+        log.warn('email-skipped', { reason: 'ZeptoMail credit exhausted (429)', to, subject })
+      } else {
+        log.error('email-failed', { to, subject, status: res.status, body })
+      }
     } else {
       log.info('email-sent', { to, subject })
     }

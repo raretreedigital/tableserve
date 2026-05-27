@@ -33,12 +33,6 @@
     ready: 'Ready',
   }
 
-  const STATUS_NEXT: Partial<Record<Status, Status>> = {
-    pending: 'confirmed',
-    confirmed: 'preparing',
-    preparing: 'ready',
-  }
-
   const STATUS_COLOR: Record<Status, string> = {
     pending: 'border-amber-400 bg-amber-50 dark:bg-amber-950/40',
     confirmed: 'border-blue-400 bg-blue-50 dark:bg-blue-950/40',
@@ -53,19 +47,11 @@
     ready: 'bg-emerald-500',
   }
 
-  const STATUS_NEXT_LABEL: Record<Status, string> = {
-    pending: 'Confirm',
-    confirmed: 'Start Cooking',
-    preparing: 'Mark Ready',
-    ready: '',
-  }
-
   let token = $derived($page.params.token ?? '')
   let orders = $state<Order[]>([])
   let loading = $state(true)
   let error = $state<string | null>(null)
   let lastRefresh = $state(new Date())
-  let advancing = $state<Record<string, boolean>>({})
   let interval: ReturnType<typeof setInterval>
 
   let byStatus = $derived(
@@ -86,17 +72,6 @@
     lastRefresh = new Date()
     loading = false
     error = null
-  }
-
-  async function advance(order: Order) {
-    const next = STATUS_NEXT[order.status]
-    if (!next) return
-    advancing[order.id] = true
-    const res = await kdsApi.advanceOrder(token, order.id)
-    advancing[order.id] = false
-    if (res.error) return
-    order.status = next
-    orders = orders.filter((o) => KITCHEN_STATUSES.includes(o.status))
   }
 
   function elapsed(dateStr: string) {
@@ -208,15 +183,7 @@
                     <p class="text-xs text-amber-400 italic border-t border-white/10 pt-2">Note: {order.notes}</p>
                   {/if}
 
-                  {#if STATUS_NEXT[status]}
-                    <button
-                      class="w-full py-2 px-3 rounded-lg bg-white/10 hover:bg-white/20 text-white text-sm font-semibold transition-colors disabled:opacity-50"
-                      disabled={advancing[order.id]}
-                      onclick={() => advance(order)}
-                    >
-                      {advancing[order.id] ? '...' : STATUS_NEXT_LABEL[status]}
-                    </button>
-                  {:else}
+                  {#if status === 'ready'}
                     <div class="w-full py-2 px-3 rounded-lg bg-emerald-500/20 text-emerald-300 text-sm font-semibold text-center">
                       Ready for pickup
                     </div>
